@@ -1,0 +1,4 @@
+/backend/.super-dev
+/backend/*.env
+backend/data/superdev_studio.db
+/backend/output

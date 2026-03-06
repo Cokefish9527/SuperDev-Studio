@@ -1,0 +1,35 @@
+author: ''
+backend: go
+cli: {}
+database: postgresql
+description: '实现一款提醒事项工具，使用适配移动端的方式开发，提供网页版本，需要有日历浏览和时间线浏览两种模式
+
+
+  迭代修复目标:
+
+  围绕需求「实现一款提醒事项工具，使用适配移动端的方式开发，提供网页版本，需要有日历浏览和时间线浏览两种模式」执行第 1 轮修复：优先补齐单元测试、修复质量门禁失败项、完善边界场景并回归验证。'
+domain: ''
+experts:
+- PM
+- ARCHITECT
+- UI
+- UX
+- SECURITY
+- CODE
+frontend: react
+license: MIT
+name: 实现一款提醒事项工具-使用适配移动端的方式开发-提供网页版本
+output_dir: output
+phases:
+- discovery
+- intelligence
+- drafting
+- redteam
+- qa
+- delivery
+- deployment
+platform: web
+quality_gate: 80
+state_management: []
+testing_frameworks: []
+version: 2.0.1

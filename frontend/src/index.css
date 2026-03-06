@@ -1,0 +1,33 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap');
+
+:root {
+  --heading-font: 'Space Grotesk', 'Segoe UI', sans-serif;
+  --body-font: 'Plus Jakarta Sans', 'Segoe UI', sans-serif;
+  --app-bg: radial-gradient(circle at 10% -10%, #ecfeff 0%, #f8fafc 45%, #fff7ed 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--body-font);
+  background: var(--app-bg);
+  color: #0f172a;
+}
+
+.ant-card {
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
+}
+
+.ant-layout-content {
+  background: transparent;
+}
