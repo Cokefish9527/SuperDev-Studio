@@ -12,11 +12,12 @@ import (
 )
 
 type pipelineRunAgentResponse struct {
-	Run             store.AgentRun `json:"run"`
-	StepCount       int            `json:"step_count"`
-	ToolCallCount   int            `json:"tool_call_count"`
-	EvidenceCount   int            `json:"evidence_count"`
-	EvaluationCount int            `json:"evaluation_count"`
+	Run              store.AgentRun         `json:"run"`
+	StepCount        int                    `json:"step_count"`
+	ToolCallCount    int                    `json:"tool_call_count"`
+	EvidenceCount    int                    `json:"evidence_count"`
+	EvaluationCount  int                    `json:"evaluation_count"`
+	LatestEvaluation *store.AgentEvaluation `json:"latest_evaluation,omitempty"`
 }
 
 type projectAgentBundleResponse struct {
@@ -59,12 +60,17 @@ func (s *Server) handleGetPipelineRunAgent(w http.ResponseWriter, r *http.Reques
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
+	var latestEvaluation *store.AgentEvaluation
+	if len(evaluations) > 0 {
+		latestEvaluation = &evaluations[len(evaluations)-1]
+	}
 	respondJSON(w, http.StatusOK, pipelineRunAgentResponse{
-		Run:             agentRun,
-		StepCount:       len(steps),
-		ToolCallCount:   len(toolCalls),
-		EvidenceCount:   len(evidence),
-		EvaluationCount: len(evaluations),
+		Run:              agentRun,
+		StepCount:        len(steps),
+		ToolCallCount:    len(toolCalls),
+		EvidenceCount:    len(evidence),
+		EvaluationCount:  len(evaluations),
+		LatestEvaluation: latestEvaluation,
 	})
 }
 

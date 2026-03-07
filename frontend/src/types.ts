@@ -160,6 +160,7 @@ export type PipelineRunAgent = {
   tool_call_count: number;
   evidence_count: number;
   evaluation_count: number;
+  latest_evaluation?: AgentEvaluation;
 };
 
 export type AgentProfile = {

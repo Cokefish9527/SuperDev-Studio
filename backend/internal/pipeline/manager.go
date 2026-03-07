@@ -804,12 +804,20 @@ func (m *Manager) runStepByStepLifecycle(ctx context.Context, runID string, req 
 				"quality_decision": qualityDecision,
 			})
 			if agentEvaluation != nil {
-				if strings.EqualFold(agentEvaluation.Verdict, "need_human") {
-					m.failRun(ctx, runID, req, qualityStage, errors.New(agentEvaluation.Reason), phasePacks)
+				switch {
+				case agentVerdictNeedsHuman(agentEvaluation.Verdict):
+					m.handoffStepByStepToHuman(ctx, runID, req, qualityStage, progress+5, agentEvaluation, phasePacks)
 					return
-				}
-				if agentVerdictAllowsAdvance(agentEvaluation.Verdict) {
+				case agentVerdictNeedsContext(agentEvaluation.Verdict):
+					qualityDecisionPassed = false
+					enrichmentSummary := m.enrichStepByStepNeedContext(ctx, runID, req, task, attempt, agentEvaluation, qualitySummary)
+					if enrichmentSummary != "" {
+						qualitySummary = strings.TrimSpace(strings.Join([]string{qualitySummary, "Context enrichment summary:", enrichmentSummary}, "\n"))
+					}
+				case agentVerdictAllowsAdvance(agentEvaluation.Verdict):
 					qualityDecisionPassed = true
+				default:
+					qualityDecisionPassed = false
 				}
 			}
 			if strings.TrimSpace(qualityDecision) != "" {

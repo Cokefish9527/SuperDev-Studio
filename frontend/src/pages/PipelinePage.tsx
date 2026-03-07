@@ -28,6 +28,7 @@ import PipelineArtifactPreviewPanel from '../components/pipeline/PipelineArtifac
 import PipelineChecklistCard from '../components/pipeline/PipelineChecklistCard';
 import PipelineStageBoardCard from '../components/pipeline/PipelineStageBoardCard';
 import PipelineTimelineCard from '../components/pipeline/PipelineTimelineCard';
+import PipelineRunDetailsModal from '../components/pipeline/PipelineRunDetailsModal';
 import type {
   AgentEvaluation,
   AgentEvidence,
@@ -74,8 +75,9 @@ export default function PipelinePage() {
   const { activeProjectId, activeChangeBatchId } = useProjectState();
   const queryClient = useQueryClient();
   const [manualSelectedRunId, setManualSelectedRunId] = useState('');
-  const [previewRunId, setPreviewRunId] = useState('');
   const [selectedArtifactPath, setSelectedArtifactPath] = useState('');
+  const [detailsModalOpen, setDetailsModalOpen] = useState(false);
+  const [detailsTabKey, setDetailsTabKey] = useState('overview');
   const [form] = Form.useForm<PipelineFormValues>();
   const contextMode = Form.useWatch('context_mode', form) as PipelineFormValues['context_mode'];
   const fullCycle = Form.useWatch('full_cycle', form) as boolean | undefined;
@@ -225,10 +227,28 @@ export default function PipelinePage() {
     },
     onError: (error: Error) => message.error(error.message || '重试失败'),
   });
+  const resumeMutation = useMutation({
+    mutationFn: apiClient.resumePipeline,
+    onSuccess: (run) => {
+      message.success('已发起恢复执行');
+      setManualSelectedRunId(run.id);
+      setSelectedArtifactPath('');
+      void queryClient.invalidateQueries({ queryKey: ['runs', activeProjectId] });
+      void queryClient.invalidateQueries({ queryKey: ['run', run.id] });
+      void queryClient.invalidateQueries({ queryKey: ['run-events', run.id] });
+      void queryClient.invalidateQueries({ queryKey: ['run-completion', run.id] });
+    },
+    onError: (error: Error) => message.error(error.message || '恢复失败'),
+  });
 
   const completionData = completionQuery.data as PipelineCompletion | undefined;
   const selectedRun = runQuery.data as PipelineRun | undefined;
-  const previewVisible = !!selectedRunId && previewRunId === selectedRunId;
+  const latestAgentEvaluation = agentRunQuery.data?.latest_evaluation ?? agentEvaluationsQuery.data?.at(-1);
+
+  const openRunDetails = (tabKey: string = 'overview') => {
+    setDetailsTabKey(tabKey);
+    setDetailsModalOpen(true);
+  };
 
   useEffect(() => {
     const project = projectQuery.data as Project | undefined;
@@ -490,93 +510,85 @@ export default function PipelinePage() {
                     columns={runColumns}
                     dataSource={runs}
                     pagination={false}
-                    scroll={{ x: 960, y: 320 }}
+                    scroll={{ x: 960, y: 360 }}
                     locale={{ emptyText: '当前项目暂无运行记录' }}
                     onRow={(record) => ({
                       onClick: () => {
                         setManualSelectedRunId(record.id);
                         setSelectedArtifactPath('');
                       },
-                      style: { cursor: 'pointer' },
+                      style: {
+                        cursor: 'pointer',
+                        background: record.id === selectedRunId ? 'rgba(59, 130, 246, 0.08)' : undefined,
+                      },
                     })}
                   />
                 )}
               </Card>
 
-              <Card style={{ borderRadius: 20 }}>
-                {!selectedRun ? (
-                  <Empty description="请选择运行记录" />
-                ) : (
-                  <Space orientation="vertical" size="large" style={{ width: '100%' }}>
-                    <Space orientation="vertical" size={6} style={{ width: '100%' }}>
-                      <Space wrap>
-                        <Typography.Title level={4} style={{ margin: 0 }}>运行详情</Typography.Title>
-                        <Tag color={statusColor(selectedRun.status)}>{selectedRun.status}</Tag>
-                        <Tag>{selectedRun.stage}</Tag>
-                        {selectedRun.llm_enhanced_loop ? <Tag color="purple">LLM 闭环</Tag> : null}
-                        {selectedRun.full_cycle ? <Tag color="cyan">full-cycle</Tag> : null}
-                        {selectedRun.step_by_step ? <Tag color="blue">step-by-step</Tag> : null}
-                        {selectedRun.simulate ? <Tag color="orange">simulate</Tag> : null}
-                      </Space>
-                      <Typography.Text type="secondary">{selectedRun.prompt}</Typography.Text>
-                      <Progress percent={selectedRun.progress} strokeColor={{ from: '#0ea5e9', to: '#7c3aed' }} />
-                    </Space>
-
-                    <Descriptions bordered size="small" column={2}>
-                      <Descriptions.Item label="运行 ID">{selectedRun.id}</Descriptions.Item>
-                      <Descriptions.Item label="变更批次">{selectedRun.change_batch_id || '-'}</Descriptions.Item>
-                      <Descriptions.Item label="项目目录">{selectedRun.project_dir || '-'}</Descriptions.Item>
-                      <Descriptions.Item label="运行模式">{formatRunMode(selectedRun)}</Descriptions.Item>
-                      <Descriptions.Item label="多模态素材数">{selectedRun.multimodal_assets?.length ?? 0}</Descriptions.Item>
-                      <Descriptions.Item label="更新时间">{dayjs(selectedRun.updated_at).format('YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
-                    </Descriptions>
-
+              <Card
+                title={"选中运行"}
+                style={{ borderRadius: 20 }}
+                extra={selectedRun ? (
+                  <Space wrap>
+                    <Button type="primary" data-testid="pipeline-run-details-open" onClick={() => openRunDetails('overview')}>
+                      {"查看运行详情"}
+                    </Button>
+                    {(completionData?.artifacts?.length || completionData?.preview_url) ? (
+                      <Button onClick={() => openRunDetails('preview')}>{"查看产物预览"}</Button>
+                    ) : null}
+                    {selectedRun.status === 'awaiting_human' ? (
+                      <Alert
+                        showIcon
+                        type="warning"
+                        style={{ marginBottom: 0, borderRadius: 14 }}
+                        message="需要人工接管"
+                        description={latestAgentEvaluation ? `${latestAgentEvaluation.reason}${latestAgentEvaluation.next_action ? `；建议动作：${latestAgentEvaluation.next_action}` : ''}` : 'Agent 已暂停，等待人工确认后继续。'}
+                      />
+                    ) : latestAgentEvaluation?.verdict === 'need_context' ? (
+                      <Alert
+                        showIcon
+                        type="info"
+                        style={{ marginBottom: 0, borderRadius: 14 }}
+                        message="Agent 曾请求补强上下文"
+                        description={`${latestAgentEvaluation.reason}${latestAgentEvaluation.next_action ? `；下一步：${latestAgentEvaluation.next_action}` : ''}`}
+                      />
+                    ) : null}
                     {selectedRun.status === 'failed' ? (
                       <Button danger onClick={() => retryMutation.mutate(selectedRun.id)} loading={retryMutation.isPending}>
-                        重试失败运行
+                        {"重试失败运行"}
                       </Button>
                     ) : null}
-
-                    <Row gutter={[16, 16]} align="top">
-                      <Col xs={24} xxl={15}>
-                        <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-                          <PipelineStageBoardCard
-                            loading={completionQuery.isLoading}
-                            completionData={completionData}
-                            stageBoard={stageBoard}
-                            selectedArtifact={selectedArtifact}
-                            previewVisible={previewVisible}
-                            onTogglePreview={() => setPreviewRunId((current) => (current === selectedRunId ? '' : selectedRunId))}
-                            onSelectArtifact={setSelectedArtifactPath}
-                          />
-                          <PipelineArtifactPreviewPanel
-                            apiBase={apiBase}
-                            selectedArtifact={selectedArtifact}
-                            artifactContent={artifactContentQuery.data}
-                            artifactLoading={artifactContentQuery.isLoading}
-                            artifactLoadFailed={artifactContentQuery.isError}
-                            previewVisible={previewVisible}
-                            previewUrl={completionData?.preview_url}
-                          />
-                        </Space>
-                      </Col>
-                      <Col xs={24} xxl={9}>
-                        <div style={{ position: 'sticky', top: 16 }}>
-                          <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-                            <PipelineChecklistCard checklist={completionData?.checklist ?? []} />
-                            <PipelineTimelineCard events={eventsQuery.data ?? []} />
-                            <AgentObservabilityCard
-                              agentRun={agentRunQuery.data}
-                              steps={agentStepsQuery.data ?? []}
-                              toolCalls={agentToolCallsQuery.data ?? []}
-                              evidence={agentEvidenceQuery.data ?? []}
-                              evaluations={agentEvaluationsQuery.data ?? []}
-                              visible={Boolean(runQuery.data?.step_by_step)}
-                            />
-                          </Space>
-                        </div>
-                      </Col>
-                    </Row>
+                    {selectedRun.status === 'awaiting_human' ? (
+                      <Button type="primary" onClick={() => resumeMutation.mutate(selectedRun.id)} loading={resumeMutation.isPending}>
+                        {"人工确认后恢复"}
+                      </Button>
+                    ) : null}
+                  </Space>
+                ) : null}
+              >
+                {!selectedRun ? (
+                  <Empty description={"请选择运行记录"} />
+                ) : (
+                  <Space orientation="vertical" size="middle" style={{ width: '100%' }} data-testid="pipeline-run-summary">
+                    <Space wrap>
+                      <Tag color={statusColor(selectedRun.status)}>{selectedRun.status}</Tag>
+                      <Tag>{selectedRun.stage}</Tag>
+                      {selectedRun.llm_enhanced_loop ? <Tag color="purple">LLM {"闭环"}</Tag> : null}
+                      {selectedRun.full_cycle ? <Tag color="cyan">full-cycle</Tag> : null}
+                      {selectedRun.step_by_step ? <Tag color="blue">step-by-step</Tag> : null}
+                      {selectedRun.simulate ? <Tag color="orange">simulate</Tag> : null}
+                    </Space>
+                    <Typography.Text type="secondary" ellipsis={{ tooltip: selectedRun.prompt }}>
+                      {selectedRun.prompt}
+                    </Typography.Text>
+                    <Progress percent={selectedRun.progress} strokeColor={{ from: '#0ea5e9', to: '#7c3aed' }} />
+                    <Descriptions size="small" column={2}>
+                      <Descriptions.Item label={"运行 ID"}>{selectedRun.id}</Descriptions.Item>
+                      <Descriptions.Item label={"运行模式"}>{formatRunMode(selectedRun)}</Descriptions.Item>
+                      <Descriptions.Item label={"更新时间"}>{dayjs(selectedRun.updated_at).format('YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
+                      <Descriptions.Item label={"产物数"}>{completionData?.artifacts?.length ?? 0}</Descriptions.Item>
+                    </Descriptions>
                   </Space>
                 )}
               </Card>
@@ -584,6 +596,60 @@ export default function PipelinePage() {
           </Col>
         </Row>
       </Space>
+
+      <PipelineRunDetailsModal
+        open={detailsModalOpen && Boolean(selectedRun)}
+        activeTab={detailsTabKey}
+        onTabChange={setDetailsTabKey}
+        onClose={() => setDetailsModalOpen(false)}
+        selectedRun={selectedRun}
+        completionData={completionData}
+        stageBoardContent={
+          <PipelineStageBoardCard
+            loading={completionQuery.isLoading}
+            completionData={completionData}
+            stageBoard={stageBoard}
+            selectedArtifact={selectedArtifact}
+            previewVisible={false}
+            onTogglePreview={() => setDetailsTabKey('preview')}
+            onSelectArtifact={setSelectedArtifactPath}
+          />
+        }
+        previewContent={
+          <PipelineArtifactPreviewPanel
+            apiBase={apiBase}
+            selectedArtifact={selectedArtifact}
+            artifactContent={artifactContentQuery.data}
+            artifactLoading={artifactContentQuery.isLoading}
+            artifactLoadFailed={artifactContentQuery.isError}
+            previewVisible={Boolean(completionData?.preview_url)}
+            previewUrl={completionData?.preview_url}
+          />
+        }
+        executionContent={
+          <Row gutter={[16, 16]} align="top">
+            <Col xs={24} xl={10}>
+              <PipelineChecklistCard checklist={completionData?.checklist ?? []} />
+            </Col>
+            <Col xs={24} xl={14}>
+              <PipelineTimelineCard events={eventsQuery.data ?? []} />
+            </Col>
+          </Row>
+        }
+        agentContent={
+          <AgentObservabilityCard
+            agentRun={agentRunQuery.data}
+            steps={agentStepsQuery.data ?? []}
+            toolCalls={agentToolCallsQuery.data ?? []}
+            evidence={agentEvidenceQuery.data ?? []}
+            evaluations={agentEvaluationsQuery.data ?? []}
+            visible={Boolean(runQuery.data?.step_by_step)}
+          />
+        }
+        onRetry={selectedRun ? () => retryMutation.mutate(selectedRun.id) : undefined}
+        retryLoading={retryMutation.isPending}
+      />
+
       <FloatButton.BackTop visibilityHeight={240} />
     </>
   );
@@ -648,10 +714,28 @@ function statusColor(status?: string) {
       return 'green';
     case 'failed':
       return 'red';
+    case 'awaiting_human':
+    case 'blocked':
+      return 'gold';
     case 'queued':
       return 'orange';
     default:
       return 'blue';
+  }
+}
+
+function agentVerdictColor(verdict?: string) {
+  switch (verdict) {
+    case 'pass':
+      return 'green';
+    case 'retry':
+      return 'orange';
+    case 'need_context':
+      return 'blue';
+    case 'need_human':
+      return 'gold';
+    default:
+      return 'red';
   }
 }
 
@@ -695,9 +779,21 @@ function AgentObservabilityCard({
     );
   }
 
+  const latestEvaluation = agentRun.latest_evaluation ?? evaluations[evaluations.length - 1];
+
   return (
     <Card title="Agent 轨迹" style={{ borderRadius: 20 }}>
-      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+      <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+        {latestEvaluation && (latestEvaluation.verdict === 'need_human' || latestEvaluation.verdict === 'need_context') ? (
+          <Alert
+            showIcon
+            type={latestEvaluation.verdict === 'need_human' ? 'warning' : 'info'}
+            message={latestEvaluation.verdict === 'need_human' ? '最新评估：需要人工接管' : '最新评估：需要补强上下文'}
+            description={`${latestEvaluation.reason}${latestEvaluation.next_action ? `；Next: ${latestEvaluation.next_action}` : ''}`}
+            style={{ borderRadius: 14 }}
+          />
+        ) : null}
+
         <Descriptions size="small" column={1}>
           <Descriptions.Item label="Agent">{agentRun.run.agent_name}</Descriptions.Item>
           <Descriptions.Item label="Mode">{agentRun.run.mode_name}</Descriptions.Item>
@@ -717,7 +813,7 @@ function AgentObservabilityCard({
 
         <div>
           <Typography.Text strong>最近步骤</Typography.Text>
-          <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
+          <Space orientation="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
             {steps.slice(-4).map((step) => (
               <div key={step.id} style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12 }}>
                 <Space wrap>
@@ -734,7 +830,7 @@ function AgentObservabilityCard({
 
         <div>
           <Typography.Text strong>最近工具调用</Typography.Text>
-          <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
+          <Space orientation="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
             {toolCalls.slice(-3).map((call) => (
               <div key={call.id} style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12 }}>
                 <Space wrap>
@@ -749,7 +845,7 @@ function AgentObservabilityCard({
 
         <div>
           <Typography.Text strong>关键证据</Typography.Text>
-          <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
+          <Space orientation="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
             {evidence.slice(-3).map((item) => (
               <div key={item.id} style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12 }}>
                 <Space wrap>
@@ -767,11 +863,11 @@ function AgentObservabilityCard({
 
         <div>
           <Typography.Text strong>评估结果</Typography.Text>
-          <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
+          <Space orientation="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
             {evaluations.slice(-3).map((item) => (
               <div key={item.id} style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12 }}>
                 <Space wrap>
-                  <Tag color={item.verdict === 'pass' ? 'green' : item.verdict === 'retry' ? 'orange' : 'red'}>{item.verdict}</Tag>
+                  <Tag color={agentVerdictColor(item.verdict)}>{item.verdict}</Tag>
                   <Typography.Text>{item.reason}</Typography.Text>
                 </Space>
                 {item.next_action ? (

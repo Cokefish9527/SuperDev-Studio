@@ -5,7 +5,7 @@
 - Phase 0：方案与规格冻结 — 已完成
 - Phase 1：Runtime Foundation — 已完成
 - Phase 2：项目级 Agent 配置接入 — 已完成
-- Phase 3：Evaluator / need_human / need_context — 待执行
+- Phase 3：Evaluator / need_human / need_context — 已完成
 - Phase 4：full_cycle Agent 化与治理收口 — 待执行
 
 ## 分阶段推进
@@ -41,12 +41,24 @@
 - 证据：`output/agent-project-config-phase2-execution-report.md`
 
 ### Phase 3：Evaluator 与人工分支
-- 状态：待执行
+- 状态：已完成
+- change_id：`agent-evaluator-human-phase3`（已归档）
 - 目标：
   - 独立 `StepOutcomeEvaluator`
   - `QualityFailureClassifier`
   - `need_human` / `need_context` 分支闭环
   - 前端人工接管视图
+- 完成标准：
+  - `need_human` 不再直接终止为不可恢复失败，而是进入可恢复人工接管状态
+  - `need_context` 具备显式上下文补强记录，并可在既有 step loop 中继续重试
+  - 后端 API 输出最新 Evaluator 结果，前端可展示并驱动恢复操作
+  - `super-dev` 规格、任务、质量门通过并完成归档
+- 执行结果：
+  - 后端完成 `need_human` / `need_context` 分支闭环、恢复执行入口与最新评估结果透出
+  - 前端完成人工接管提示、恢复执行、补强上下文提示，以及运行详情弹窗化整理
+  - 自动化验证通过：`go test ./internal/store ./internal/agentconfig ./internal/pipeline ./internal/api`、`npm test`、`npm run build`
+  - 流水线门禁通过：`super-dev task run agent-evaluator-human-phase3`、`super-dev quality --type all`、`super-dev spec archive agent-evaluator-human-phase3`
+- 证据：`output/agent-evaluator-human-phase3-execution-report.md`
 
 ### Phase 4：full_cycle 与治理收口
 - 状态：待执行

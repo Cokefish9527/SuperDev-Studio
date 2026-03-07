@@ -87,6 +87,7 @@ func (s *Server) Router() http.Handler {
 	r.With(s.rateLimit(s.mutationPolicy("tasks:update"))).Patch("/api/tasks/{taskID}", s.handleUpdateTask)
 	r.With(s.rateLimit(s.pipelinePolicy("runs:start"))).Post("/api/pipeline/runs", s.handleStartPipeline)
 	r.With(s.rateLimit(s.pipelinePolicy("runs:retry"))).Post("/api/pipeline/runs/{runID}/retry", s.handleRetryPipeline)
+	r.With(s.rateLimit(s.pipelinePolicy("runs:retry"))).Post("/api/pipeline/runs/{runID}/resume", s.handleResumePipeline)
 	r.Get("/api/pipeline/runs/{runID}", s.handleGetPipelineRun)
 	r.Get("/api/pipeline/runs/{runID}/agent", s.handleGetPipelineRunAgent)
 	r.Get("/api/pipeline/runs/{runID}/agent/steps", s.handleListPipelineRunAgentSteps)
@@ -947,20 +948,66 @@ func (s *Server) handleRetryPipeline(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, errors.New("only failed runs can be retried"))
 		return
 	}
+	run, startErr := s.restartPipelineRun(r.Context(), previousRun)
+	if startErr != nil {
+		respondError(w, http.StatusInternalServerError, startErr)
+		return
+	}
+
+	_, _ = s.store.AppendRunEvent(r.Context(), store.RunEvent{
+		RunID:   run.ID,
+		Stage:   "retry",
+		Status:  "log",
+		Message: fmt.Sprintf("Retried from failed run %s", previousRun.ID),
+	})
+
+	respondJSON(w, http.StatusAccepted, run)
+}
+
+func (s *Server) handleResumePipeline(w http.ResponseWriter, r *http.Request) {
+	runID := chi.URLParam(r, "runID")
+	previousRun, err := s.store.GetPipelineRun(r.Context(), runID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			respondError(w, http.StatusNotFound, err)
+			return
+		}
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if previousRun.Status != "awaiting_human" {
+		respondError(w, http.StatusBadRequest, errors.New("only awaiting_human runs can be resumed"))
+		return
+	}
+	run, startErr := s.restartPipelineRun(r.Context(), previousRun)
+	if startErr != nil {
+		respondError(w, http.StatusInternalServerError, startErr)
+		return
+	}
+
+	_, _ = s.store.AppendRunEvent(r.Context(), store.RunEvent{
+		RunID:   run.ID,
+		Stage:   "resume",
+		Status:  "log",
+		Message: fmt.Sprintf("Resumed from awaiting_human run %s", previousRun.ID),
+	})
+
+	respondJSON(w, http.StatusAccepted, run)
+}
+
+func (s *Server) restartPipelineRun(ctx context.Context, previousRun store.PipelineRun) (store.PipelineRun, error) {
 
 	contextMode, modeErr := parseContextMode(previousRun.ContextMode)
 	if modeErr != nil {
-		respondError(w, http.StatusBadRequest, modeErr)
-		return
+		return store.PipelineRun{}, modeErr
 	}
 	if contextMode == pipeline.ContextModeManual && strings.TrimSpace(previousRun.ContextQuery) == "" {
-		respondError(w, http.StatusBadRequest, errors.New("context_query is required when context_mode=manual"))
-		return
+		return store.PipelineRun{}, errors.New("context_query is required when context_mode=manual")
 	}
 
 	retryAgentName := ""
 	retryAgentMode := ""
-	if previousAgentRun, agentErr := s.store.GetAgentRunByPipelineRun(r.Context(), runID); agentErr == nil {
+	if previousAgentRun, agentErr := s.store.GetAgentRunByPipelineRun(ctx, previousRun.ID); agentErr == nil {
 		retryAgentName = previousAgentRun.AgentName
 		retryAgentMode = previousAgentRun.ModeName
 	}
@@ -999,7 +1046,7 @@ func (s *Server) handleRetryPipeline(w http.ResponseWriter, r *http.Request) {
 		},
 		Options: pipeline.RunRequest{
 			Prompt:     previousRun.Prompt,
-			ProjectDir: s.resolveProjectDirForRetry(r.Context(), previousRun),
+			ProjectDir: s.resolveProjectDirForRetry(ctx, previousRun),
 			Platform:   strings.TrimSpace(previousRun.Platform),
 			Frontend:   strings.TrimSpace(previousRun.Frontend),
 			Backend:    strings.TrimSpace(previousRun.Backend),
@@ -1007,20 +1054,7 @@ func (s *Server) handleRetryPipeline(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	run, startErr := s.pipeline.Start(r.Context(), startReq)
-	if startErr != nil {
-		respondError(w, http.StatusInternalServerError, startErr)
-		return
-	}
-
-	_, _ = s.store.AppendRunEvent(r.Context(), store.RunEvent{
-		RunID:   run.ID,
-		Stage:   "retry",
-		Status:  "log",
-		Message: fmt.Sprintf("Retried from failed run %s", previousRun.ID),
-	})
-
-	respondJSON(w, http.StatusAccepted, run)
+	return s.pipeline.Start(ctx, startReq)
 }
 
 func valueOrDefault(value *bool, defaultValue bool) bool {

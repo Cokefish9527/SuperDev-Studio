@@ -31,17 +31,21 @@ export default function PipelineTimelineCard({ events }: Props) {
 
   return (
     <Card
-      title="?????"
+      title={'推进时间线'}
       style={{ borderRadius: 18 }}
       extra={events.length > 0 ? (
         <Space wrap>
-          <Typography.Text type="secondary">?? {range.start}-{range.end} / {events.length}</Typography.Text>
-          <Button size="small" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>????</Button>
+          <Typography.Text type="secondary" data-testid="pipeline-timeline-summary">
+            {'当前'} {range.start}-{range.end} / {events.length}
+          </Typography.Text>
+          <Button data-testid="pipeline-timeline-back-top" size="small" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+            {'回到顶部'}
+          </Button>
         </Space>
       ) : null}
     >
       {events.length === 0 ? (
-        <Empty description="??????" />
+        <Empty description={'暂无时间线数据'} />
       ) : (
         <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
           <div style={{ maxHeight: 480, overflowY: 'auto', paddingRight: 8 }}>
@@ -65,12 +69,12 @@ export default function PipelineTimelineCard({ events }: Props) {
 
           {maxPage > 1 ? (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-              <Button onClick={() => setPage((value) => Math.max(1, Math.min(value, maxPage) - 1))} disabled={currentPage === 1}>
-                ???
+              <Button data-testid="pipeline-timeline-prev" onClick={() => setPage((value) => Math.max(1, Math.min(value, maxPage) - 1))} disabled={currentPage === 1}>
+                {'上一页'}
               </Button>
-              <Typography.Text type="secondary">? {currentPage} / {maxPage} ?</Typography.Text>
-              <Button onClick={() => setPage((value) => Math.min(maxPage, Math.min(value, maxPage) + 1))} disabled={currentPage === maxPage}>
-                ???
+              <Typography.Text type="secondary">{'第'} {currentPage} / {maxPage} {'页'}</Typography.Text>
+              <Button data-testid="pipeline-timeline-next" onClick={() => setPage((value) => Math.min(maxPage, Math.min(value, maxPage) + 1))} disabled={currentPage === maxPage}>
+                {'下一页'}
               </Button>
             </div>
           ) : null}

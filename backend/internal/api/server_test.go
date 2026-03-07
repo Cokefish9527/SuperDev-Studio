@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"superdevstudio/internal/agentruntime"
 	"superdevstudio/internal/agentruntime/eino"
 	"superdevstudio/internal/contextopt"
 	"superdevstudio/internal/pipeline"
@@ -69,6 +72,132 @@ func enableAgentRuntimeForTest(t *testing.T, env apiTestEnv) {
 	env.pipeline.SetAgentRuntime(runtime)
 }
 
+type scriptedAgentRuntime struct {
+	store           *store.Store
+	mu              sync.Mutex
+	evaluateVerdict []string
+	evaluateIndex   int
+}
+
+func newScriptedAgentRuntime(s *store.Store, verdicts ...string) *scriptedAgentRuntime {
+	return &scriptedAgentRuntime{store: s, evaluateVerdict: append([]string{}, verdicts...)}
+}
+
+func (r *scriptedAgentRuntime) StartRun(ctx context.Context, req agentruntime.StartRunRequest) (store.AgentRun, error) {
+	return r.store.CreateAgentRun(ctx, store.AgentRun{
+		PipelineRunID: req.PipelineRunID,
+		ProjectID:     req.ProjectID,
+		ChangeBatchID: req.ChangeBatchID,
+		AgentName:     firstNonEmpty(req.AgentName, "delivery-agent"),
+		ModeName:      firstNonEmpty(req.ModeName, "step_by_step"),
+		Status:        "running",
+		CurrentNode:   firstNonEmpty(req.CurrentNode, "bootstrap"),
+	})
+}
+
+func (r *scriptedAgentRuntime) GetRunByPipelineRun(ctx context.Context, pipelineRunID string) (store.AgentRun, error) {
+	return r.store.GetAgentRunByPipelineRun(ctx, pipelineRunID)
+}
+
+func (r *scriptedAgentRuntime) Plan(ctx context.Context, req agentruntime.PlanRequest) (agentruntime.PlanResult, error) {
+	step, err := r.store.CreateAgentStep(ctx, store.AgentStep{
+		AgentRunID: req.AgentRunID,
+		NodeName:   req.NodeName,
+		Title:      req.Title,
+		InputJSON:  "{}",
+		Status:     "running",
+	})
+	if err != nil {
+		return agentruntime.PlanResult{}, err
+	}
+	finished := time.Now().UTC()
+	if err := r.store.UpdateAgentStep(ctx, step.ID, "completed", `{"summary":"scripted plan"}`, "scripted plan", &finished); err != nil {
+		return agentruntime.PlanResult{}, err
+	}
+	step.Status = "completed"
+	step.OutputJSON = `{"summary":"scripted plan"}`
+	step.DecisionSummary = "scripted plan"
+	step.FinishedAt = &finished
+	_ = r.store.UpdateAgentRun(ctx, req.AgentRunID, "running", req.NodeName, "scripted plan", nil)
+	return agentruntime.PlanResult{Step: step, Summary: "scripted plan", SuggestedTool: "run_superdev_task_run", NextAction: "continue"}, nil
+}
+
+func (r *scriptedAgentRuntime) Evaluate(ctx context.Context, req agentruntime.EvaluateRequest) (agentruntime.EvaluateResult, error) {
+	step, err := r.store.CreateAgentStep(ctx, store.AgentStep{
+		AgentRunID: req.AgentRunID,
+		NodeName:   req.NodeName,
+		Title:      req.Title,
+		InputJSON:  "{}",
+		Status:     "running",
+	})
+	if err != nil {
+		return agentruntime.EvaluateResult{}, err
+	}
+	r.mu.Lock()
+	verdict := "pass"
+	if r.evaluateIndex < len(r.evaluateVerdict) {
+		verdict = strings.TrimSpace(r.evaluateVerdict[r.evaluateIndex])
+		r.evaluateIndex++
+	}
+	r.mu.Unlock()
+	if verdict == "" {
+		verdict = "pass"
+	}
+	reason := map[string]string{
+		"need_context": "Current context is insufficient for a safe decision.",
+		"need_human":   "Human confirmation is required for this risky change.",
+		"retry":        "Retry the current task with a repair step.",
+		"fail":         "The current attempt cannot be accepted.",
+	}[verdict]
+	if reason == "" {
+		reason = "Evaluation passed."
+	}
+	nextAction := map[string]string{
+		"need_context": "Collect more evidence and retry.",
+		"need_human":   "Review the risk and resume execution.",
+		"retry":        "Run another repair attempt.",
+		"fail":         "Stop the current execution.",
+		"pass":         "Continue to the next step.",
+	}[verdict]
+	record, err := r.store.CreateAgentEvaluation(ctx, store.AgentEvaluation{
+		AgentStepID:    step.ID,
+		EvaluationType: "step-outcome",
+		Verdict:        verdict,
+		Reason:         reason,
+		NextAction:     nextAction,
+	})
+	if err != nil {
+		return agentruntime.EvaluateResult{}, err
+	}
+	finished := time.Now().UTC()
+	outputJSON := fmt.Sprintf(`{"verdict":%q,"reason":%q,"next_action":%q}`, verdict, reason, nextAction)
+	if err := r.store.UpdateAgentStep(ctx, step.ID, "completed", outputJSON, reason, &finished); err != nil {
+		return agentruntime.EvaluateResult{}, err
+	}
+	step.Status = "completed"
+	step.OutputJSON = outputJSON
+	step.DecisionSummary = reason
+	step.FinishedAt = &finished
+	_ = r.store.UpdateAgentRun(ctx, req.AgentRunID, "running", req.NodeName, reason, nil)
+	return agentruntime.EvaluateResult{Step: step, Verdict: verdict, Reason: reason, NextAction: nextAction, Evaluation: record, Raw: outputJSON}, nil
+}
+
+func (r *scriptedAgentRuntime) RecordToolCall(ctx context.Context, req agentruntime.ToolCallRequest) (store.AgentToolCall, error) {
+	return r.store.CreateAgentToolCall(ctx, store.AgentToolCall{
+		AgentStepID:  req.AgentStepID,
+		ToolName:     req.ToolName,
+		RequestJSON:  "{}",
+		ResponseJSON: "{}",
+		Success:      req.Success,
+		LatencyMS:    int(req.Latency / time.Millisecond),
+	})
+}
+
+func (r *scriptedAgentRuntime) FinishRun(ctx context.Context, runID, currentNode, summary string) error {
+	finished := time.Now().UTC()
+	return r.store.UpdateAgentRun(ctx, runID, "completed", currentNode, summary, &finished)
+}
+
 func createProjectViaAPI(t *testing.T, handler http.Handler, name string) store.Project {
 	t.Helper()
 	return createProjectViaAPIWithPayload(t, handler, map[string]any{
@@ -105,7 +234,7 @@ func waitForRunCompletion(t *testing.T, s *store.Store, runID string) store.Pipe
 		if err != nil {
 			t.Fatalf("get run: %v", err)
 		}
-		if run.Status == "completed" || run.Status == "failed" {
+		if run.Status == "completed" || run.Status == "failed" || run.Status == "awaiting_human" {
 			return run
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -1243,5 +1372,176 @@ max_retries: 2
 	}
 	if agentRun.ModeName != "review" {
 		t.Fatalf("expected review mode, got %q", agentRun.ModeName)
+	}
+}
+
+func TestStepByStepNeedContextPersistsEnrichmentTrace(t *testing.T) {
+	env := newAPITestEnv(t)
+	env.pipeline.SetAgentRuntime(newScriptedAgentRuntime(env.store, "need_context", "pass", "pass", "pass"))
+	ctx := context.Background()
+	repoRoot := t.TempDir()
+	project := createProjectViaAPIWithPayload(t, env.handler, map[string]any{
+		"name":        "NeedContextProject",
+		"description": "test project",
+		"repo_path":   repoRoot,
+	})
+	if _, err := env.store.CreateMemory(ctx, store.Memory{
+		ProjectID:  project.ID,
+		Role:       "system",
+		Content:    "Project memory for context enrichment around risky delivery workflow.",
+		Tags:       []string{"agent", "context"},
+		Importance: 0.9,
+	}); err != nil {
+		t.Fatalf("create memory: %v", err)
+	}
+
+	payload, _ := json.Marshal(map[string]any{
+		"project_id":   project.ID,
+		"prompt":       "Use additional context before finalizing the task",
+		"step_by_step": true,
+		"project_dir":  repoRoot,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/pipeline/runs", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	env.handler.ServeHTTP(res, req)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", res.Code)
+	}
+	var run store.PipelineRun
+	if err := json.Unmarshal(res.Body.Bytes(), &run); err != nil {
+		t.Fatalf("decode run: %v", err)
+	}
+	finished := waitForRunCompletion(t, env.store, run.ID)
+	if finished.Status != "completed" {
+		t.Fatalf("expected completed run, got %q", finished.Status)
+	}
+	agentRun, err := env.store.GetAgentRunByPipelineRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get agent run: %v", err)
+	}
+	evaluations, err := env.store.ListAgentEvaluations(ctx, agentRun.ID)
+	if err != nil {
+		t.Fatalf("list evaluations: %v", err)
+	}
+	if len(evaluations) == 0 || evaluations[0].Verdict != "need_context" {
+		t.Fatalf("expected first evaluation to be need_context, got %#v", evaluations)
+	}
+	evidence, err := env.store.ListAgentEvidence(ctx, agentRun.ID)
+	if err != nil {
+		t.Fatalf("list evidence: %v", err)
+	}
+	foundEnrichment := false
+	for _, item := range evidence {
+		if item.SourceType == "context_enrichment" {
+			foundEnrichment = true
+			break
+		}
+	}
+	if !foundEnrichment {
+		t.Fatalf("expected context_enrichment evidence, got %#v", evidence)
+	}
+	events, err := env.store.ListRunEvents(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("list run events: %v", err)
+	}
+	foundEvent := false
+	for _, item := range events {
+		if item.Stage == "step-context-enrichment" {
+			foundEvent = true
+			break
+		}
+	}
+	if !foundEvent {
+		t.Fatalf("expected step-context-enrichment event")
+	}
+}
+
+func TestStepByStepNeedHumanCanResume(t *testing.T) {
+	env := newAPITestEnv(t)
+	env.pipeline.SetAgentRuntime(newScriptedAgentRuntime(env.store, "need_human", "pass", "pass", "pass"))
+	ctx := context.Background()
+	repoRoot := t.TempDir()
+	project := createProjectViaAPIWithPayload(t, env.handler, map[string]any{
+		"name":        "NeedHumanProject",
+		"description": "test project",
+		"repo_path":   repoRoot,
+	})
+
+	payload, _ := json.Marshal(map[string]any{
+		"project_id":   project.ID,
+		"prompt":       "Pause for human confirmation before finishing",
+		"step_by_step": true,
+		"project_dir":  repoRoot,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/pipeline/runs", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	env.handler.ServeHTTP(res, req)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", res.Code)
+	}
+	var run store.PipelineRun
+	if err := json.Unmarshal(res.Body.Bytes(), &run); err != nil {
+		t.Fatalf("decode run: %v", err)
+	}
+	blocked := waitForRunCompletion(t, env.store, run.ID)
+	if blocked.Status != "awaiting_human" {
+		t.Fatalf("expected awaiting_human, got %q", blocked.Status)
+	}
+	agentRun, err := env.store.GetAgentRunByPipelineRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get agent run: %v", err)
+	}
+	if agentRun.Status != "awaiting_human" {
+		t.Fatalf("expected agent awaiting_human, got %q", agentRun.Status)
+	}
+
+	agentReq := httptest.NewRequest(http.MethodGet, "/api/pipeline/runs/"+run.ID+"/agent", nil)
+	agentRes := httptest.NewRecorder()
+	env.handler.ServeHTTP(agentRes, agentReq)
+	if agentRes.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", agentRes.Code)
+	}
+	var agentResponse struct {
+		LatestEvaluation *store.AgentEvaluation `json:"latest_evaluation"`
+	}
+	if err := json.Unmarshal(agentRes.Body.Bytes(), &agentResponse); err != nil {
+		t.Fatalf("decode agent response: %v", err)
+	}
+	if agentResponse.LatestEvaluation == nil || agentResponse.LatestEvaluation.Verdict != "need_human" {
+		t.Fatalf("expected latest need_human evaluation, got %#v", agentResponse.LatestEvaluation)
+	}
+
+	resumeReq := httptest.NewRequest(http.MethodPost, "/api/pipeline/runs/"+run.ID+"/resume", nil)
+	resumeRes := httptest.NewRecorder()
+	env.handler.ServeHTTP(resumeRes, resumeReq)
+	if resumeRes.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", resumeRes.Code)
+	}
+	var resumed store.PipelineRun
+	if err := json.Unmarshal(resumeRes.Body.Bytes(), &resumed); err != nil {
+		t.Fatalf("decode resumed run: %v", err)
+	}
+	if resumed.RetryOf != run.ID {
+		t.Fatalf("expected retry_of=%s, got %s", run.ID, resumed.RetryOf)
+	}
+	completed := waitForRunCompletion(t, env.store, resumed.ID)
+	if completed.Status != "completed" {
+		t.Fatalf("expected completed resumed run, got %q", completed.Status)
+	}
+	events, err := env.store.ListRunEvents(ctx, resumed.ID)
+	if err != nil {
+		t.Fatalf("list resumed events: %v", err)
+	}
+	foundResume := false
+	for _, item := range events {
+		if item.Stage == "resume" && strings.Contains(item.Message, run.ID) {
+			foundResume = true
+			break
+		}
+	}
+	if !foundResume {
+		t.Fatalf("expected resume event referencing previous run %s; events=%v", run.ID, events)
 	}
 }

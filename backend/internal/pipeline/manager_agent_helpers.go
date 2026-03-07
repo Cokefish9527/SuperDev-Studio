@@ -144,3 +144,11 @@ func resolveAllowedTools(bundle agentconfig.Bundle, agentName string) []string {
 func agentVerdictAllowsAdvance(verdict string) bool {
 	return strings.EqualFold(strings.TrimSpace(verdict), "pass")
 }
+
+func agentVerdictNeedsContext(verdict string) bool {
+	return strings.EqualFold(strings.TrimSpace(verdict), "need_context")
+}
+
+func agentVerdictNeedsHuman(verdict string) bool {
+	return strings.EqualFold(strings.TrimSpace(verdict), "need_human")
+}

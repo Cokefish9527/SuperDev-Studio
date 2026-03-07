@@ -142,6 +142,8 @@ export const apiClient = {
   }) => (await api.post<PipelineRun>('/api/pipeline/runs', payload)).data,
   retryPipeline: async (runId: string) =>
     (await api.post<PipelineRun>(`/api/pipeline/runs/${runId}/retry`)).data,
+  resumePipeline: async (runId: string) =>
+    (await api.post<PipelineRun>(`/api/pipeline/runs/${runId}/resume`)).data,
   getRunCompletion: async (runId: string) =>
     (await api.get<PipelineCompletion>(`/api/pipeline/runs/${runId}/completion`)).data,
   getRun: async (runId: string) => (await api.get<PipelineRun>(`/api/pipeline/runs/${runId}`)).data,
