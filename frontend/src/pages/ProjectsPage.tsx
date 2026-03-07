@@ -19,11 +19,9 @@ import {
 import dayjs from 'dayjs';
 import { useMemo, useState } from 'react';
 import { apiClient } from '../api/client';
+import ProjectScheduleGanttCard from '../components/projects/ProjectScheduleGanttCard';
 import { useProjectState } from '../state/project-context';
 import type { Project, Task } from '../types';
-
-const ganttLabelWidth = 240;
-const ganttCellWidth = 36;
 
 type TaskFormValues = {
   title: string;
@@ -47,16 +45,6 @@ const formatDateValue = (value?: string) => {
   return parsed.format('YYYY-MM-DD');
 };
 
-const taskBarColor = (status: string) => {
-  switch (status) {
-    case 'done':
-      return '#52c41a';
-    case 'in_progress':
-      return '#1677ff';
-    default:
-      return '#faad14';
-  }
-};
 
 export default function ProjectsPage() {
   const [open, setOpen] = useState(false);
@@ -230,49 +218,6 @@ export default function ProjectsPage() {
     },
   ];
 
-  const ganttData = useMemo(() => {
-    const scheduledTasks = (tasksQuery.data ?? [])
-      .map((task) => {
-        if (!task.start_date || !task.due_date) {
-          return null;
-        }
-        const start = dayjs(task.start_date).startOf('day');
-        const end = dayjs(task.due_date).startOf('day');
-        if (!start.isValid() || !end.isValid() || end.isBefore(start)) {
-          return null;
-        }
-        return { ...task, start, end };
-      })
-      .filter((task): task is Task & { start: dayjs.Dayjs; end: dayjs.Dayjs } => task !== null)
-      .sort((left, right) => left.start.valueOf() - right.start.valueOf());
-
-    if (!scheduledTasks.length) {
-      return null;
-    }
-
-    const timelineStart = scheduledTasks.reduce(
-      (current, task) => (task.start.isBefore(current) ? task.start : current),
-      scheduledTasks[0].start,
-    );
-    const timelineEnd = scheduledTasks.reduce(
-      (current, task) => (task.end.isAfter(current) ? task.end : current),
-      scheduledTasks[0].end,
-    );
-    const totalDays = Math.max(1, timelineEnd.diff(timelineStart, 'day') + 1);
-    const days = Array.from({ length: totalDays }, (_, index) => timelineStart.add(index, 'day'));
-    const rows = scheduledTasks.map((task) => {
-      const offset = Math.max(0, task.start.diff(timelineStart, 'day'));
-      const span = Math.max(1, task.end.diff(task.start, 'day') + 1);
-      return { ...task, offset, span };
-    });
-
-    return {
-      days,
-      rows,
-      totalDays,
-      gridWidth: totalDays * ganttCellWidth,
-    };
-  }, [tasksQuery.data]);
 
   return (
     <Space orientation="vertical" size="large" style={{ width: '100%' }}>
@@ -336,107 +281,7 @@ export default function ProjectsPage() {
         )}
       </Card>
 
-      <Card title="计划排期视图">
-        {!activeProjectId ? (
-          <Typography.Text type="secondary">请选择一个工作区以查看甘特图。</Typography.Text>
-        ) : !ganttData ? (
-          <Typography.Text type="secondary">
-            当前暂无可绘制的排期数据，请先点击“自动生成排期”。
-          </Typography.Text>
-        ) : (
-          <div style={{ overflowX: 'auto', border: '1px solid #f0f0f0', borderRadius: 10 }}>
-            <div style={{ minWidth: ganttLabelWidth + ganttData.gridWidth }}>
-              <div style={{ display: 'flex', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>
-                <div
-                  style={{
-                    width: ganttLabelWidth,
-                    padding: '10px 12px',
-                    fontWeight: 600,
-                    flex: '0 0 auto',
-                  }}
-                >
-                  任务
-                </div>
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: `repeat(${ganttData.totalDays}, ${ganttCellWidth}px)`,
-                    flex: '0 0 auto',
-                  }}
-                >
-                  {ganttData.days.map((day) => (
-                    <div
-                      key={day.format('YYYY-MM-DD')}
-                      style={{
-                        borderLeft: '1px solid #f0f0f0',
-                        textAlign: 'center',
-                        fontSize: 12,
-                        color: '#666',
-                        padding: '10px 0',
-                      }}
-                    >
-                      {day.format('MM/DD')}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {ganttData.rows.map((row) => (
-                <div key={row.id} style={{ display: 'flex', borderBottom: '1px solid #f5f5f5' }}>
-                  <div
-                    style={{
-                      width: ganttLabelWidth,
-                      padding: '8px 12px',
-                      flex: '0 0 auto',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <Typography.Text strong ellipsis>
-                      {row.title}
-                    </Typography.Text>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {row.status} | {row.priority}
-                    </Typography.Text>
-                  </div>
-                  <div
-                    style={{
-                      width: ganttData.gridWidth,
-                      height: 44,
-                      position: 'relative',
-                      flex: '0 0 auto',
-                      backgroundImage: 'linear-gradient(to right, #f5f5f5 1px, transparent 1px)',
-                      backgroundSize: `${ganttCellWidth}px 100%`,
-                    }}
-                  >
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: row.offset * ganttCellWidth + 2,
-                        top: 8,
-                        width: Math.max(row.span * ganttCellWidth - 4, 24),
-                        height: 28,
-                        background: taskBarColor(row.status),
-                        borderRadius: 6,
-                        color: '#fff',
-                        fontSize: 12,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        padding: '0 8px',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {row.span}d
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </Card>
+      <ProjectScheduleGanttCard tasks={tasksQuery.data ?? []} projectSelected={!!activeProjectId} />
 
       <Modal
         open={open}
