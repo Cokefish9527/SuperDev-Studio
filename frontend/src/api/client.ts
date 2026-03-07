@@ -1,5 +1,11 @@
 import axios from 'axios';
 import type {
+  AgentEvaluation,
+  AgentEvidence,
+  AgentStep,
+  AgentToolCall,
+  PipelineRunAgent,
+  ChangeBatch,
   ContextPack,
   DashboardResponse,
   KnowledgeChunk,
@@ -27,9 +33,17 @@ export const apiClient = {
   health: async () => (await api.get<{ status: string }>('/api/health')).data,
 
   listProjects: async () => unwrapItems<Project>(api.get('/api/projects')),
+  getProject: async (id: string) => (await api.get<Project>(`/api/projects/${id}`)).data,
   createProject: async (payload: Partial<Project>) => (await api.post<Project>('/api/projects', payload)).data,
   updateProject: async (id: string, payload: Partial<Project>) => (await api.put<Project>(`/api/projects/${id}`, payload)).data,
   deleteProject: async (id: string) => (await api.delete<{ status: string }>(`/api/projects/${id}`)).data,
+
+  listChangeBatches: async (projectId: string) =>
+    unwrapItems<ChangeBatch>(api.get(`/api/projects/${projectId}/change-batches`)),
+  createChangeBatch: async (
+    projectId: string,
+    payload: { title: string; goal?: string; mode?: string },
+  ) => (await api.post<ChangeBatch>(`/api/projects/${projectId}/change-batches`, payload)).data,
 
   listTasks: async (projectId: string) => unwrapItems<Task>(api.get(`/api/projects/${projectId}/tasks`)),
   createTask: async (projectId: string, payload: Partial<Task>) =>
@@ -102,7 +116,10 @@ export const apiClient = {
 
   startPipeline: async (payload: {
     project_id: string;
+    change_batch_id?: string;
     prompt: string;
+    llm_enhanced_loop?: boolean;
+    multimodal_assets?: string[];
     simulate: boolean;
     full_cycle?: boolean;
     step_by_step?: boolean;
@@ -124,6 +141,16 @@ export const apiClient = {
   getRunCompletion: async (runId: string) =>
     (await api.get<PipelineCompletion>(`/api/pipeline/runs/${runId}/completion`)).data,
   getRun: async (runId: string) => (await api.get<PipelineRun>(`/api/pipeline/runs/${runId}`)).data,
+  getRunAgent: async (runId: string) =>
+    (await api.get<PipelineRunAgent>(`/api/pipeline/runs/${runId}/agent`)).data,
+  listRunAgentSteps: async (runId: string) =>
+    unwrapItems<AgentStep>(api.get(`/api/pipeline/runs/${runId}/agent/steps`)),
+  listRunAgentToolCalls: async (runId: string) =>
+    unwrapItems<AgentToolCall>(api.get(`/api/pipeline/runs/${runId}/agent/tool-calls`)),
+  listRunAgentEvidence: async (runId: string) =>
+    unwrapItems<AgentEvidence>(api.get(`/api/pipeline/runs/${runId}/agent/evidence`)),
+  listRunAgentEvaluations: async (runId: string) =>
+    unwrapItems<AgentEvaluation>(api.get(`/api/pipeline/runs/${runId}/agent/evaluations`)),
   listRunEvents: async (runId: string) => unwrapItems<RunEvent>(api.get(`/api/pipeline/runs/${runId}/events`)),
   listRuns: async (projectId: string, limit = 20) =>
     unwrapItems<PipelineRun>(api.get(`/api/projects/${projectId}/pipeline-runs`, { params: { limit } })),

@@ -1,40 +1,83 @@
-import { useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  Alert,
   Button,
   Card,
   Col,
   Descriptions,
   Empty,
+  FloatButton,
   Form,
   Input,
   InputNumber,
-  List,
   Progress,
   Row,
-  Select,
   Space,
   Switch,
   Table,
   Tag,
-  Timeline,
   Typography,
   message,
 } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { apiClient } from '../api/client';
-import type { PipelineCompletion, PipelineRun, RunEvent } from '../types';
+import PipelineArtifactPreviewPanel from '../components/pipeline/PipelineArtifactPreviewPanel';
+import PipelineChecklistCard from '../components/pipeline/PipelineChecklistCard';
+import PipelineStageBoardCard from '../components/pipeline/PipelineStageBoardCard';
+import PipelineTimelineCard from '../components/pipeline/PipelineTimelineCard';
+import type {
+  AgentEvaluation,
+  AgentEvidence,
+  AgentStep,
+  AgentToolCall,
+  ChangeBatch,
+  PipelineArtifact,
+  PipelineCompletion,
+  PipelineRunAgent,
+  PipelineRun,
+  PipelineStage,
+  Project,
+} from '../types';
 import { useProjectState } from '../state/project-context';
 
+type PipelineFormValues = {
+  prompt: string;
+  llm_enhanced_loop?: boolean;
+  multimodal_assets_text?: string;
+  simulate: boolean;
+  full_cycle?: boolean;
+  step_by_step?: boolean;
+  iteration_limit?: number;
+  project_dir?: string;
+  context_mode?: 'off' | 'auto' | 'manual';
+  context_query?: string;
+  context_token_budget?: number;
+  context_max_items?: number;
+  context_dynamic?: boolean;
+  memory_writeback?: boolean;
+};
+
+const STAGE_FALLBACK: PipelineStage[] = [
+  { key: 'idea', title: '构思', status: 'pending', artifacts: [] },
+  { key: 'design', title: '设计', status: 'pending', artifacts: [] },
+  { key: 'superdev', title: 'super-dev', status: 'pending', artifacts: [] },
+  { key: 'output', title: '产出', status: 'pending', artifacts: [] },
+  { key: 'rethink', title: '再构思', status: 'pending', artifacts: [] },
+];
+
 export default function PipelinePage() {
-  const { activeProjectId } = useProjectState();
+  const { activeProjectId, activeChangeBatchId } = useProjectState();
   const queryClient = useQueryClient();
-  const [manualSelectedRunId, setManualSelectedRunId] = useState<string>('');
+  const [manualSelectedRunId, setManualSelectedRunId] = useState('');
   const [previewRunId, setPreviewRunId] = useState('');
-  const [form] = Form.useForm();
-  const contextMode = Form.useWatch('context_mode', form) as 'off' | 'auto' | 'manual' | undefined;
+  const [selectedArtifactPath, setSelectedArtifactPath] = useState('');
+  const [form] = Form.useForm<PipelineFormValues>();
+  const contextMode = Form.useWatch('context_mode', form) as PipelineFormValues['context_mode'];
   const fullCycle = Form.useWatch('full_cycle', form) as boolean | undefined;
   const stepByStep = Form.useWatch('step_by_step', form) as boolean | undefined;
+  const llmEnhancedLoop = Form.useWatch('llm_enhanced_loop', form) as boolean | undefined;
   const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
 
   const runsQuery = useQuery({
@@ -43,7 +86,19 @@ export default function PipelinePage() {
     enabled: !!activeProjectId,
     refetchInterval: 2500,
   });
+  const projectQuery = useQuery({
+    queryKey: ['project', activeProjectId],
+    queryFn: () => apiClient.getProject(activeProjectId),
+    enabled: !!activeProjectId,
+  });
+  const changeBatchesQuery = useQuery({
+    queryKey: ['change-batches', activeProjectId],
+    queryFn: () => apiClient.listChangeBatches(activeProjectId),
+    enabled: !!activeProjectId,
+  });
+
   const runs = runsQuery.data ?? [];
+  const selectedBatch = (changeBatchesQuery.data ?? []).find((item: ChangeBatch) => item.id === activeChangeBatchId);
   const selectedRunId = runs.some((item) => item.id === manualSelectedRunId)
     ? manualSelectedRunId
     : runs[0]?.id ?? '';
@@ -54,10 +109,7 @@ export default function PipelinePage() {
     enabled: !!selectedRunId,
     refetchInterval: (query) => {
       const status = (query.state.data as PipelineRun | undefined)?.status;
-      if (status === 'running' || status === 'queued') {
-        return 2000;
-      }
-      return false;
+      return status === 'running' || status === 'queued' ? 2000 : false;
     },
   });
 
@@ -65,25 +117,56 @@ export default function PipelinePage() {
     queryKey: ['run-events', selectedRunId],
     queryFn: () => apiClient.listRunEvents(selectedRunId),
     enabled: !!selectedRunId,
-    refetchInterval: (query) => {
-      const runStatus = runQuery.data?.status;
-      if (runStatus === 'running' || runStatus === 'queued') {
-        return 1500;
-      }
-      if (query.state.data && (query.state.data as RunEvent[]).length < 2) {
-        return 1500;
-      }
-      return false;
+    refetchInterval: () => {
+      const status = runQuery.data?.status;
+      return status === 'running' || status === 'queued' ? 1500 : false;
     },
   });
 
   const completionQuery = useQuery({
     queryKey: ['run-completion', selectedRunId],
     queryFn: () => apiClient.getRunCompletion(selectedRunId),
-    enabled:
-      !!selectedRunId &&
-      !!runQuery.data &&
-      (runQuery.data.status === 'completed' || runQuery.data.status === 'failed'),
+    enabled: !!selectedRunId,
+    refetchInterval: () => {
+      const status = runQuery.data?.status;
+      return status === 'running' || status === 'queued' ? 1500 : false;
+    },
+  });
+
+  const agentEnabled = Boolean(selectedRunId && runQuery.data?.step_by_step);
+  const agentRunQuery = useQuery({
+    queryKey: ['run-agent', selectedRunId],
+    queryFn: () => apiClient.getRunAgent(selectedRunId),
+    enabled: agentEnabled,
+    retry: false,
+    refetchInterval: () => {
+      const status = runQuery.data?.status;
+      return status === 'running' || status === 'queued' ? 1500 : false;
+    },
+  });
+  const agentStepsQuery = useQuery({
+    queryKey: ['run-agent-steps', selectedRunId],
+    queryFn: () => apiClient.listRunAgentSteps(selectedRunId),
+    enabled: agentEnabled,
+    retry: false,
+  });
+  const agentToolCallsQuery = useQuery({
+    queryKey: ['run-agent-tool-calls', selectedRunId],
+    queryFn: () => apiClient.listRunAgentToolCalls(selectedRunId),
+    enabled: agentEnabled,
+    retry: false,
+  });
+  const agentEvidenceQuery = useQuery({
+    queryKey: ['run-agent-evidence', selectedRunId],
+    queryFn: () => apiClient.listRunAgentEvidence(selectedRunId),
+    enabled: agentEnabled,
+    retry: false,
+  });
+  const agentEvaluationsQuery = useQuery({
+    queryKey: ['run-agent-evaluations', selectedRunId],
+    queryFn: () => apiClient.listRunAgentEvaluations(selectedRunId),
+    enabled: agentEnabled,
+    retry: false,
   });
 
   const startMutation = useMutation({
@@ -91,12 +174,18 @@ export default function PipelinePage() {
     onSuccess: (run) => {
       message.success('流水线已启动');
       setManualSelectedRunId(run.id);
+      setSelectedArtifactPath('');
       form.resetFields();
+      form.setFieldsValue({
+        simulate: true,
+        full_cycle: false,
+        step_by_step: false,
+        iteration_limit: 3,
+        llm_enhanced_loop: true,
+      });
       void queryClient.invalidateQueries({ queryKey: ['runs', activeProjectId] });
     },
-    onError: (error: Error) => {
-      message.error(error.message || '启动失败');
-    },
+    onError: (error: Error) => message.error(error.message || '启动失败'),
   });
 
   const retryMutation = useMutation({
@@ -104,331 +193,547 @@ export default function PipelinePage() {
     onSuccess: (run) => {
       message.success('已创建重试运行');
       setManualSelectedRunId(run.id);
+      setSelectedArtifactPath('');
       void queryClient.invalidateQueries({ queryKey: ['runs', activeProjectId] });
       void queryClient.invalidateQueries({ queryKey: ['run', run.id] });
       void queryClient.invalidateQueries({ queryKey: ['run-events', run.id] });
+      void queryClient.invalidateQueries({ queryKey: ['run-completion', run.id] });
     },
-    onError: (error: Error) => {
-      message.error(error.message || '重试失败');
-    },
+    onError: (error: Error) => message.error(error.message || '重试失败'),
   });
 
   const completionData = completionQuery.data as PipelineCompletion | undefined;
+  const selectedRun = runQuery.data as PipelineRun | undefined;
   const previewVisible = !!selectedRunId && previewRunId === selectedRunId;
 
-  const runColumns = useMemo(
+  useEffect(() => {
+    const project = projectQuery.data as Project | undefined;
+    if (!project) {
+      return;
+    }
+    form.setFieldsValue({
+      project_dir: project.repo_path || undefined,
+      context_mode: normalizeContextMode(project.default_context_mode),
+      context_token_budget: project.default_context_token_budget,
+      context_max_items: project.default_context_max_items,
+      context_dynamic: project.default_context_dynamic,
+      memory_writeback: project.default_memory_writeback,
+      llm_enhanced_loop: true,
+    });
+  }, [form, projectQuery.data]);
+
+  const stageBoard = useMemo(() => buildStageBoard(completionData), [completionData]);
+  const allArtifacts = useMemo(() => completionData?.artifacts ?? [], [completionData]);
+  const selectedArtifact = useMemo(() => {
+    if (selectedArtifactPath) {
+      return allArtifacts.find((artifact) => artifact.path === selectedArtifactPath);
+    }
+    return pickDefaultArtifact(allArtifacts);
+  }, [allArtifacts, selectedArtifactPath]);
+
+  const artifactContentQuery = useQuery({
+    queryKey: ['artifact-content', selectedRunId, selectedArtifact?.preview_url],
+    queryFn: async () => {
+      if (!selectedArtifact?.preview_url) {
+        return '';
+      }
+      const response = await fetch(`${apiBase}${selectedArtifact.preview_url}`);
+      if (!response.ok) {
+        throw new Error('预览内容加载失败');
+      }
+      return response.text();
+    },
+    enabled:
+      !!selectedArtifact?.preview_url &&
+      (selectedArtifact.preview_type === 'markdown' || selectedArtifact.preview_type === 'text'),
+  });
+
+  const runColumns = useMemo<ColumnsType<PipelineRun>>(
     () => [
-      {
-        title: '状态',
-        dataIndex: 'status',
-        key: 'status',
-        render: (status: string) => (
-          <Tag color={status === 'completed' ? 'green' : status === 'failed' ? 'red' : 'blue'}>{status}</Tag>
-        ),
-      },
-      {
-        title: '阶段',
-        dataIndex: 'stage',
-        key: 'stage',
-      },
-      {
-        title: '进度',
-        dataIndex: 'progress',
-        key: 'progress',
-        render: (value: number) => `${value}%`,
-      },
-      {
-        title: '需求',
-        dataIndex: 'prompt',
-        key: 'prompt',
-      },
-      {
-        title: '开始时间',
-        dataIndex: 'created_at',
-        key: 'created_at',
-        render: (value: string) => dayjs(value).format('YYYY-MM-DD HH:mm:ss'),
-      },
+      { title: '状态', dataIndex: 'status', key: 'status', width: 110, render: (value: string) => <Tag color={statusColor(value)}>{value}</Tag> },
+      { title: '阶段', dataIndex: 'stage', key: 'stage', width: 180 },
+      { title: '进度', dataIndex: 'progress', key: 'progress', width: 120, render: (value: number) => `${value}%` },
+      { title: '需求', dataIndex: 'prompt', key: 'prompt' },
+      { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 180, render: (value: string) => dayjs(value).format('YYYY-MM-DD HH:mm:ss') },
     ],
     [],
   );
 
   return (
-    <Space orientation="vertical" size="large" style={{ width: '100%' }}>
-      <Typography.Title level={2} style={{ margin: 0, fontFamily: 'var(--heading-font)' }}>
-        super-dev 流水线控制台
-      </Typography.Title>
+    <>
+      <Space orientation="vertical" size="large" style={{ width: '100%' }}>
+        <Card variant="borderless" style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', color: '#e2e8f0', borderRadius: 24 }}>
+          <Row gutter={[20, 20]} align="middle">
+            <Col xs={24} xl={14}>
+              <Space orientation="vertical" size={10} style={{ width: '100%' }}>
+                <Tag color="gold" style={{ width: 'fit-content', borderRadius: 999 }}>Volcengine 多模态 × super-dev 闭环</Tag>
+                <Typography.Title level={2} style={{ margin: 0, color: '#f8fafc', fontFamily: 'var(--heading-font)' }}>
+                  构思 → 设计 → super-dev → 产出 → 再构思
+                </Typography.Title>
+                <Typography.Paragraph style={{ color: '#cbd5e1', marginBottom: 0 }}>
+                  阶段产物会在运行过程中持续暴露，支持 Markdown / HTML / 文本内联预览，解决“只能看到第一阶段骨架文档”的问题。
+                </Typography.Paragraph>
+              </Space>
+            </Col>
+            <Col xs={24} xl={10}>
+              <Row gutter={[12, 12]}>
+                <Col span={12}><MetricCard label="当前批次" value={selectedBatch?.title || '项目级运行'} note={selectedBatch?.goal || '未绑定 change batch'} /></Col>
+                <Col span={12}><MetricCard label="当前运行" value={selectedRun?.status || '待启动'} note={selectedRun?.stage || 'queued'} /></Col>
+                <Col span={12}><MetricCard label="LLM 闭环" value={selectedRun?.llm_enhanced_loop ? '已启用' : '可启用'} note={`${selectedRun?.multimodal_assets?.length ?? 0} 个素材`} /></Col>
+                <Col span={12}><MetricCard label="可预览阶段" value={`${stageBoard.filter((item) => item.artifacts.length > 0).length}/5`} note={completionData?.preview_url ? '含 HTML 预览' : '以内联预览为主'} /></Col>
+              </Row>
+            </Col>
+          </Row>
+        </Card>
 
-      <Card title="启动新运行">
-        {!activeProjectId ? (
-          <Empty description="请先选择项目" />
-        ) : (
-          <Form
-            layout="vertical"
-            form={form}
-            onFinish={(
-              values: {
-                prompt: string;
-                simulate: boolean;
-                full_cycle?: boolean;
-                step_by_step?: boolean;
-                iteration_limit?: number;
-                project_dir?: string;
-                context_mode?: 'off' | 'auto' | 'manual';
-                context_query?: string;
-                context_token_budget?: number;
-                context_max_items?: number;
-                context_dynamic?: boolean;
-                memory_writeback?: boolean;
-              },
-            ) => {
-              startMutation.mutate({
-                project_id: activeProjectId,
-                prompt: values.prompt,
-                simulate: values.full_cycle || values.step_by_step ? false : (values.simulate ?? true),
-                full_cycle: values.full_cycle,
-                step_by_step: values.step_by_step,
-                iteration_limit: values.iteration_limit,
-                project_dir: values.project_dir,
-                platform: 'web',
-                frontend: 'react',
-                backend: 'go',
-                context_mode: values.context_mode ?? 'off',
-                context_query: values.context_query,
-                context_token_budget: values.context_token_budget,
-                context_max_items: values.context_max_items,
-                context_dynamic: values.context_dynamic,
-                memory_writeback: values.memory_writeback,
-              });
-            }}
-            initialValues={{
-              simulate: true,
-              full_cycle: false,
-              step_by_step: false,
-              iteration_limit: 3,
-              context_mode: 'auto',
-              context_token_budget: 1200,
-              context_max_items: 8,
-              context_dynamic: true,
-              memory_writeback: true,
-            }}
-          >
-            <Row gutter={16}>
-              <Col xs={24} lg={16}>
-                <Form.Item name="prompt" label="需求描述" rules={[{ required: true, message: '请输入需求描述' }]}> 
-                  <Input.TextArea rows={3} placeholder="例如：实现一个支持知识库检索和项目任务管理的开发协作平台" />
-                </Form.Item>
-              </Col>
-              <Col xs={24} lg={8}>
-                <Form.Item name="project_dir" label="目标项目目录（可选）">
-                  <Input placeholder="D:/Work/target-project" />
-                </Form.Item>
-                <Form.Item name="simulate" label="模拟模式" valuePropName="checked">
-                  <Switch
-                    checkedChildren="模拟"
-                    unCheckedChildren="真实 super-dev"
-                    disabled={Boolean(fullCycle || stepByStep)}
-                  />
-                </Form.Item>
-                <Form.Item name="full_cycle" label="一键全流程交付" valuePropName="checked">
-                  <Switch checkedChildren="开启" unCheckedChildren="关闭" disabled={Boolean(stepByStep)} />
-                </Form.Item>
-                <Form.Item name="step_by_step" label="按 super-dev 原生步骤执行" valuePropName="checked">
-                  <Switch checkedChildren="开启" unCheckedChildren="关闭" disabled={Boolean(fullCycle)} />
-                </Form.Item>
-                {fullCycle ? (
-                  <>
-                    <Form.Item name="iteration_limit" label="开发-单测-修复迭代次数">
-                      <InputNumber min={1} max={8} step={1} style={{ width: '100%' }} />
-                    </Form.Item>
-                    <Typography.Paragraph type="secondary" style={{ marginTop: -8 }}>
-                      开启后将自动执行：设计 → 开发迭代 → 质量测试 → 验收总结 → 上线准备（真实模式）
-                    </Typography.Paragraph>
-                  </>
-                ) : null}
-                {stepByStep ? (
-                  <Typography.Paragraph type="secondary" style={{ marginTop: -8 }}>
-                    开启后将自动执行：create → task run → quality → preview → deploy（真实模式）
-                  </Typography.Paragraph>
-                ) : null}
-                <Form.Item name="context_mode" label="上下文注入策略">
-                  <Select
-                    options={[
-                      { value: 'off', label: '关闭' },
-                      { value: 'auto', label: '自动（按需求召回）' },
-                      { value: 'manual', label: '手动（按自定义查询）' },
-                    ]}
-                  />
-                </Form.Item>
-                {contextMode === 'manual' && (
-                  <Form.Item
-                    name="context_query"
-                    label="上下文查询"
-                    rules={[{ required: true, message: 'manual 模式需要输入查询' }]}
-                  >
-                    <Input placeholder="例如：订单接口兼容性 + 回滚策略" />
+        <Row gutter={[16, 16]}>
+          <Col xs={24} xl={10}>
+            <Card title="启动新运行" style={{ borderRadius: 20 }}>
+              {!activeProjectId ? (
+                <Empty description="请先选择项目" />
+              ) : (
+                <Form<PipelineFormValues>
+                  layout="vertical"
+                  form={form}
+                  initialValues={{
+                    simulate: true,
+                    full_cycle: false,
+                    step_by_step: false,
+                    iteration_limit: 3,
+                    context_mode: 'auto',
+                    context_token_budget: 1200,
+                    context_max_items: 8,
+                    context_dynamic: true,
+                    memory_writeback: true,
+                    llm_enhanced_loop: true,
+                  }}
+                  onFinish={(values) => {
+                    startMutation.mutate({
+                      project_id: activeProjectId,
+                      change_batch_id: activeChangeBatchId || undefined,
+                      prompt: values.prompt,
+                      llm_enhanced_loop: values.llm_enhanced_loop,
+                      multimodal_assets: parseMultimodalAssets(values.multimodal_assets_text),
+                      simulate: values.full_cycle || values.step_by_step ? false : (values.simulate ?? true),
+                      full_cycle: values.full_cycle,
+                      step_by_step: values.step_by_step,
+                      iteration_limit: values.iteration_limit,
+                      project_dir: values.project_dir,
+                      platform: projectQuery.data?.default_platform,
+                      frontend: projectQuery.data?.default_frontend,
+                      backend: projectQuery.data?.default_backend,
+                      domain: projectQuery.data?.default_domain,
+                      context_mode: values.context_mode ?? 'off',
+                      context_query: values.context_query,
+                      context_token_budget: values.context_token_budget,
+                      context_max_items: values.context_max_items,
+                      context_dynamic: values.context_dynamic,
+                      memory_writeback: values.memory_writeback,
+                    });
+                  }}
+                >
+                  <Form.Item name="prompt" label="需求描述" rules={[{ required: true, message: '请输入需求描述' }]}>
+                    <Input.TextArea rows={4} placeholder="例如：实现一个支持知识库检索和项目任务管理的开发协作平台" />
                   </Form.Item>
-                )}
-                {contextMode !== 'off' && (
-                  <>
-                    <Form.Item name="context_token_budget" label="上下文 Token 预算">
-                      <InputNumber min={200} max={8000} step={100} style={{ width: '100%' }} />
+
+                  <Card size="small" style={{ marginBottom: 16, borderRadius: 16, background: '#f8fafc' }}>
+                    <Space orientation="vertical" size={4} style={{ width: '100%' }}>
+                      <Typography.Text strong>当前变更批次</Typography.Text>
+                      <Typography.Text>{selectedBatch?.title || '未选择，运行将只挂到项目层'}</Typography.Text>
+                      <Typography.Text type="secondary">
+                        {selectedBatch?.goal || '可先在“变更中心”选中 change batch，再回到这里启动。'}
+                      </Typography.Text>
+                    </Space>
+                  </Card>
+
+                  <Row gutter={12}>
+                    <Col span={12}>
+                      <Form.Item name="simulate" label="模拟模式" valuePropName="checked">
+                        <Switch checkedChildren="模拟" unCheckedChildren="真实 super-dev" disabled={Boolean(fullCycle || stepByStep)} />
+                      </Form.Item>
+                    </Col>
+                    <Col span={12}>
+                      <Form.Item name="llm_enhanced_loop" label="启用多模态 LLM 闭环" valuePropName="checked">
+                        <Switch checkedChildren="启用" unCheckedChildren="关闭" />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+
+                  <Row gutter={12}>
+                    <Col span={12}>
+                      <Form.Item name="full_cycle" label="一键全流程交付" valuePropName="checked">
+                        <Switch checkedChildren="开启" unCheckedChildren="关闭" disabled={Boolean(stepByStep)} />
+                      </Form.Item>
+                    </Col>
+                    <Col span={12}>
+                      <Form.Item name="step_by_step" label="按 super-dev 原生步骤执行" valuePropName="checked">
+                        <Switch checkedChildren="开启" unCheckedChildren="关闭" disabled={Boolean(fullCycle)} />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+
+                  {fullCycle ? (
+                    <Form.Item name="iteration_limit" label="开发-单测-修复迭代次数">
+                      <InputNumber min={1} max={8} style={{ width: '100%' }} />
                     </Form.Item>
-                    <Form.Item name="context_max_items" label="最大上下文条目数">
-                      <InputNumber min={2} max={20} step={1} style={{ width: '100%' }} />
-                    </Form.Item>
-                    <Form.Item name="context_dynamic" label="按阶段动态召回" valuePropName="checked">
+                  ) : null}
+
+                  <Form.Item name="multimodal_assets_text" label="多模态参考素材 URL（每行一个，可选）">
+                    <Input.TextArea rows={4} placeholder={'https://example.com/wireframe.png\nhttps://example.com/brand-board.jpg'} disabled={!llmEnhancedLoop} />
+                  </Form.Item>
+
+                  {llmEnhancedLoop ? (
+                    <Alert showIcon type="info" style={{ marginBottom: 16, borderRadius: 14 }} title="已启用火山引擎多模态闭环" description="会自动生成构思稿、设计复核稿和复盘再构思稿，并在右侧阶段看板持续刷新。" />
+                  ) : null}
+
+                  <Form.Item name="project_dir" label="目标项目目录（可选）">
+                    <Input placeholder="D:/Work/target-project" />
+                  </Form.Item>
+
+                  <Card size="small" title="上下文强化" style={{ marginBottom: 16, borderRadius: 16 }}>
+                    <Row gutter={12}>
+                      <Col span={12}>
+                        <Form.Item name="context_mode" label="上下文模式">
+                          <Input placeholder="off / auto / manual" />
+                        </Form.Item>
+                      </Col>
+                      <Col span={12}>
+                        <Form.Item name="context_token_budget" label="Token 预算">
+                          <InputNumber min={200} max={6000} step={100} style={{ width: '100%' }} />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                    <Row gutter={12}>
+                      <Col span={12}>
+                        <Form.Item name="context_max_items" label="最大条目数">
+                          <InputNumber min={1} max={20} style={{ width: '100%' }} />
+                        </Form.Item>
+                      </Col>
+                      <Col span={12}>
+                        <Form.Item name="context_dynamic" label="动态阶段上下文" valuePropName="checked">
+                          <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                    <Form.Item name="memory_writeback" label="运行后写回记忆" valuePropName="checked" style={{ marginBottom: contextMode === 'manual' ? 12 : 0 }}>
                       <Switch checkedChildren="开启" unCheckedChildren="关闭" />
                     </Form.Item>
-                  </>
-                )}
-                <Form.Item name="memory_writeback" label="运行结束回写记忆" valuePropName="checked">
-                  <Switch checkedChildren="开启" unCheckedChildren="关闭" />
-                </Form.Item>
-                <Button type="primary" htmlType="submit" loading={startMutation.isPending}>
-                  启动流水线
-                </Button>
-              </Col>
-            </Row>
-          </Form>
-        )}
-      </Card>
+                    {contextMode === 'manual' ? (
+                      <Form.Item name="context_query" label="手动上下文查询" rules={[{ required: true, message: 'manual 模式下请输入 context_query' }]} style={{ marginBottom: 0 }}>
+                        <Input.TextArea rows={3} placeholder="例如：检索最近 2 次质量门禁失败的根因与修复方案" />
+                      </Form.Item>
+                    ) : null}
+                  </Card>
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={11}>
-          <Card title="运行列表">
-            <Table<PipelineRun>
-              rowKey="id"
-              dataSource={runs}
-              columns={runColumns}
-              loading={runsQuery.isLoading}
-              pagination={{ pageSize: 6 }}
-              rowSelection={{
-                type: 'radio',
-                selectedRowKeys: selectedRunId ? [selectedRunId] : [],
-                onChange: (keys) => setManualSelectedRunId(String(keys[0] ?? '')),
-              }}
-              onRow={(record) => ({ onClick: () => setManualSelectedRunId(record.id) })}
-            />
-          </Card>
-        </Col>
-
-        <Col xs={24} lg={13}>
-          <Card title="运行详情">
-            {!selectedRunId || !runQuery.data ? (
-              <Empty description="请选择一条运行记录" />
-            ) : (
-              <Space orientation="vertical" style={{ width: '100%' }}>
-                <Progress
-                  percent={runQuery.data.progress}
-                  status={runQuery.data.status === 'failed' ? 'exception' : 'active'}
-                />
-                <Descriptions column={1} size="small" bordered>
-                  <Descriptions.Item label="运行 ID">{runQuery.data.id}</Descriptions.Item>
-                  {runQuery.data.retry_of ? (
-                    <Descriptions.Item label="重试来源">{runQuery.data.retry_of}</Descriptions.Item>
-                  ) : null}
-                  <Descriptions.Item label="阶段">{runQuery.data.stage}</Descriptions.Item>
-                  <Descriptions.Item label="状态">{runQuery.data.status}</Descriptions.Item>
-                  <Descriptions.Item label="需求">{runQuery.data.prompt}</Descriptions.Item>
-                </Descriptions>
-                {runQuery.data.status === 'failed' ? (
-                  <Button
-                    danger
-                    onClick={() => retryMutation.mutate(runQuery.data.id)}
-                    loading={retryMutation.isPending}
-                  >
-                    重试失败运行
+                  <Button type="primary" htmlType="submit" block size="large" loading={startMutation.isPending}>
+                    启动流水线
                   </Button>
-                ) : null}
-                <Card size="small" title="完成清单" loading={completionQuery.isLoading}>
-                  {!completionData ? (
-                    <Empty description="运行完成后可查看产物清单" />
-                  ) : (
-                    <Space orientation="vertical" style={{ width: '100%' }} size="middle">
-                      <Typography.Text type="secondary">输出目录：{completionData.output_dir}</Typography.Text>
-                      <List
-                        size="small"
-                        dataSource={completionData.checklist}
-                        renderItem={(item) => (
-                          <List.Item>
-                            <Space>
-                              <Tag
-                                color={
-                                  item.status === 'completed'
-                                    ? 'green'
-                                    : item.status === 'failed'
-                                      ? 'red'
-                                      : item.status === 'in_progress'
-                                        ? 'blue'
-                                        : 'orange'
-                                }
-                              >
-                                {item.status}
-                              </Tag>
-                              <Typography.Text>{item.title}</Typography.Text>
-                              {item.note ? <Typography.Text type="secondary">{item.note}</Typography.Text> : null}
-                            </Space>
-                          </List.Item>
-                        )}
-                      />
-                      <Typography.Text strong>产物列表</Typography.Text>
-                      <List
-                        size="small"
-                        dataSource={completionData.artifacts}
-                        renderItem={(artifact) => (
-                          <List.Item>
-                            <Space orientation="vertical" size={0}>
-                              <Typography.Text>{artifact.name}</Typography.Text>
-                              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                                {artifact.path}
-                              </Typography.Text>
-                            </Space>
-                          </List.Item>
-                        )}
-                      />
-                      {completionData.preview_url ? (
-                        <>
-                          <Button
-                            onClick={() =>
-                              setPreviewRunId((current) => (current === selectedRunId ? '' : selectedRunId))
-                            }
-                          >
-                            {previewVisible ? '隐藏预览' : '预览页面'}
-                          </Button>
-                          {previewVisible ? (
-                            <iframe
-                              title="pipeline-preview"
-                              src={`${apiBase}${completionData.preview_url}`}
-                              style={{ width: '100%', height: 460, border: '1px solid #f0f0f0' }}
-                            />
-                          ) : null}
-                        </>
-                      ) : null}
-                    </Space>
-                  )}
-                </Card>
-                <Timeline
-                  items={(eventsQuery.data ?? []).map((event) => ({
-                    color:
-                      event.status === 'failed' ? 'red' : event.status === 'completed' ? 'green' : 'blue',
-                    children: (
-                      <Space orientation="vertical" size={2}>
-                        <Typography.Text strong>
-                          [{event.stage}] {event.status}
-                        </Typography.Text>
-                        <Typography.Text>{event.message}</Typography.Text>
-                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                          {dayjs(event.created_at).format('YYYY-MM-DD HH:mm:ss')}
-                        </Typography.Text>
+                </Form>
+              )}
+            </Card>
+          </Col>
+
+          <Col xs={24} xl={14}>
+            <Space orientation="vertical" size="large" style={{ width: '100%' }}>
+              <Card title="运行列表" extra={selectedRun ? <Tag color={statusColor(selectedRun.status)}>{selectedRun.status}</Tag> : null} style={{ borderRadius: 20 }}>
+                {!activeProjectId ? (
+                  <Empty description="请先选择项目" />
+                ) : (
+                  <Table<PipelineRun>
+                    rowKey="id"
+                    columns={runColumns}
+                    dataSource={runs}
+                    pagination={false}
+                    scroll={{ x: 960, y: 320 }}
+                    locale={{ emptyText: '当前项目暂无运行记录' }}
+                    onRow={(record) => ({
+                      onClick: () => {
+                        setManualSelectedRunId(record.id);
+                        setSelectedArtifactPath('');
+                      },
+                      style: { cursor: 'pointer' },
+                    })}
+                  />
+                )}
+              </Card>
+
+              <Card style={{ borderRadius: 20 }}>
+                {!selectedRun ? (
+                  <Empty description="请选择运行记录" />
+                ) : (
+                  <Space orientation="vertical" size="large" style={{ width: '100%' }}>
+                    <Space orientation="vertical" size={6} style={{ width: '100%' }}>
+                      <Space wrap>
+                        <Typography.Title level={4} style={{ margin: 0 }}>运行详情</Typography.Title>
+                        <Tag color={statusColor(selectedRun.status)}>{selectedRun.status}</Tag>
+                        <Tag>{selectedRun.stage}</Tag>
+                        {selectedRun.llm_enhanced_loop ? <Tag color="purple">LLM 闭环</Tag> : null}
+                        {selectedRun.full_cycle ? <Tag color="cyan">full-cycle</Tag> : null}
+                        {selectedRun.step_by_step ? <Tag color="blue">step-by-step</Tag> : null}
+                        {selectedRun.simulate ? <Tag color="orange">simulate</Tag> : null}
                       </Space>
-                    ),
-                  }))}
-                />
-              </Space>
-            )}
-          </Card>
-        </Col>
-      </Row>
-    </Space>
+                      <Typography.Text type="secondary">{selectedRun.prompt}</Typography.Text>
+                      <Progress percent={selectedRun.progress} strokeColor={{ from: '#0ea5e9', to: '#7c3aed' }} />
+                    </Space>
+
+                    <Descriptions bordered size="small" column={2}>
+                      <Descriptions.Item label="运行 ID">{selectedRun.id}</Descriptions.Item>
+                      <Descriptions.Item label="变更批次">{selectedRun.change_batch_id || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="项目目录">{selectedRun.project_dir || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="运行模式">{formatRunMode(selectedRun)}</Descriptions.Item>
+                      <Descriptions.Item label="多模态素材数">{selectedRun.multimodal_assets?.length ?? 0}</Descriptions.Item>
+                      <Descriptions.Item label="更新时间">{dayjs(selectedRun.updated_at).format('YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
+                    </Descriptions>
+
+                    {selectedRun.status === 'failed' ? (
+                      <Button danger onClick={() => retryMutation.mutate(selectedRun.id)} loading={retryMutation.isPending}>
+                        重试失败运行
+                      </Button>
+                    ) : null}
+
+                    <Row gutter={[16, 16]} align="top">
+                      <Col xs={24} xxl={15}>
+                        <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+                          <PipelineStageBoardCard
+                            loading={completionQuery.isLoading}
+                            completionData={completionData}
+                            stageBoard={stageBoard}
+                            selectedArtifact={selectedArtifact}
+                            previewVisible={previewVisible}
+                            onTogglePreview={() => setPreviewRunId((current) => (current === selectedRunId ? '' : selectedRunId))}
+                            onSelectArtifact={setSelectedArtifactPath}
+                          />
+                          <PipelineArtifactPreviewPanel
+                            apiBase={apiBase}
+                            selectedArtifact={selectedArtifact}
+                            artifactContent={artifactContentQuery.data}
+                            artifactLoading={artifactContentQuery.isLoading}
+                            artifactLoadFailed={artifactContentQuery.isError}
+                            previewVisible={previewVisible}
+                            previewUrl={completionData?.preview_url}
+                          />
+                        </Space>
+                      </Col>
+                      <Col xs={24} xxl={9}>
+                        <div style={{ position: 'sticky', top: 16 }}>
+                          <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+                            <PipelineChecklistCard checklist={completionData?.checklist ?? []} />
+                            <PipelineTimelineCard events={eventsQuery.data ?? []} />
+                            <AgentObservabilityCard
+                              agentRun={agentRunQuery.data}
+                              steps={agentStepsQuery.data ?? []}
+                              toolCalls={agentToolCallsQuery.data ?? []}
+                              evidence={agentEvidenceQuery.data ?? []}
+                              evaluations={agentEvaluationsQuery.data ?? []}
+                              visible={Boolean(runQuery.data?.step_by_step)}
+                            />
+                          </Space>
+                        </div>
+                      </Col>
+                    </Row>
+                  </Space>
+                )}
+              </Card>
+            </Space>
+          </Col>
+        </Row>
+      </Space>
+      <FloatButton.BackTop visibilityHeight={240} />
+    </>
+  );
+}
+
+function MetricCard({ label, value, note }: { label: string; value: string; note: string }) {
+  return (
+    <div style={{ padding: '14px 16px', borderRadius: 18, background: 'rgba(255,255,255,0.08)', minHeight: 110 }}>
+      <Typography.Text style={{ color: '#94a3b8', fontSize: 12 }}>{label}</Typography.Text>
+      <Typography.Title level={5} style={{ margin: '8px 0 6px', color: '#f8fafc' }}>{value}</Typography.Title>
+      <Typography.Text style={{ color: '#cbd5e1', fontSize: 12 }}>{note}</Typography.Text>
+    </div>
+  );
+}
+
+function buildStageBoard(completion?: PipelineCompletion) {
+  if (!completion?.stages?.length) {
+    return STAGE_FALLBACK;
+  }
+  return STAGE_FALLBACK.map((fallback) => completion.stages.find((stage) => stage.key === fallback.key) ?? fallback);
+}
+
+function pickDefaultArtifact(artifacts: PipelineArtifact[]) {
+  const priority = ['html', 'markdown', 'text', 'image', 'binary'];
+  for (const type of priority) {
+    const item = artifacts.find((artifact) => artifact.preview_type === type);
+    if (item) {
+      return item;
+    }
+  }
+  return artifacts[0];
+}
+
+function parseMultimodalAssets(raw?: string) {
+  if (!raw) {
+    return [] as string[];
+  }
+  return raw
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter((item, index, array) => item && array.indexOf(item) === index);
+}
+
+function normalizeContextMode(raw?: string): 'off' | 'auto' | 'manual' {
+  switch (raw) {
+    case 'manual':
+      return 'manual';
+    case 'off':
+      return 'off';
+    default:
+      return 'auto';
+  }
+}
+
+function statusColor(status?: string) {
+  switch (status) {
+    case 'completed':
+      return 'green';
+    case 'failed':
+      return 'red';
+    case 'queued':
+      return 'orange';
+    default:
+      return 'blue';
+  }
+}
+
+function formatRunMode(run: PipelineRun) {
+  if (run.step_by_step) {
+    return 'step-by-step';
+  }
+  if (run.full_cycle) {
+    return 'full-cycle';
+  }
+  if (run.simulate) {
+    return 'simulate';
+  }
+  return 'super-dev';
+}
+
+function AgentObservabilityCard({
+  agentRun,
+  steps,
+  toolCalls,
+  evidence,
+  evaluations,
+  visible,
+}: {
+  agentRun?: PipelineRunAgent;
+  steps: AgentStep[];
+  toolCalls: AgentToolCall[];
+  evidence: AgentEvidence[];
+  evaluations: AgentEvaluation[];
+  visible: boolean;
+}) {
+  if (!visible) {
+    return null;
+  }
+
+  if (!agentRun) {
+    return (
+      <Card title="Agent 轨迹" style={{ borderRadius: 20 }}>
+        <Empty description="当前运行尚未生成 Agent 轨迹" />
+      </Card>
+    );
+  }
+
+  return (
+    <Card title="Agent 轨迹" style={{ borderRadius: 20 }}>
+      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <Descriptions size="small" column={1}>
+          <Descriptions.Item label="Agent">{agentRun.run.agent_name}</Descriptions.Item>
+          <Descriptions.Item label="Mode">{agentRun.run.mode_name}</Descriptions.Item>
+          <Descriptions.Item label="当前节点">{agentRun.run.current_node || '-'}</Descriptions.Item>
+          <Descriptions.Item label="状态">
+            <Tag color={statusColor(agentRun.run.status)}>{agentRun.run.status}</Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label="摘要">{agentRun.run.summary || '等待 Agent 输出摘要'}</Descriptions.Item>
+        </Descriptions>
+
+        <Space wrap>
+          <Tag color="blue">Steps {agentRun.step_count}</Tag>
+          <Tag color="purple">Tool Calls {agentRun.tool_call_count}</Tag>
+          <Tag color="gold">Evidence {agentRun.evidence_count}</Tag>
+          <Tag color="green">Evaluations {agentRun.evaluation_count}</Tag>
+        </Space>
+
+        <div>
+          <Typography.Text strong>最近步骤</Typography.Text>
+          <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
+            {steps.slice(-4).map((step) => (
+              <div key={step.id} style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12 }}>
+                <Space wrap>
+                  <Tag color={statusColor(step.status)}>{step.status}</Tag>
+                  <Typography.Text strong>{step.title || step.node_name}</Typography.Text>
+                </Space>
+                <Typography.Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 8 }}>
+                  {step.decision_summary || step.node_name}
+                </Typography.Paragraph>
+              </div>
+            ))}
+          </Space>
+        </div>
+
+        <div>
+          <Typography.Text strong>最近工具调用</Typography.Text>
+          <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
+            {toolCalls.slice(-3).map((call) => (
+              <div key={call.id} style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12 }}>
+                <Space wrap>
+                  <Tag color={call.success ? 'green' : 'red'}>{call.success ? 'success' : 'failed'}</Tag>
+                  <Typography.Text code>{call.tool_name}</Typography.Text>
+                  <Typography.Text type="secondary">{call.latency_ms} ms</Typography.Text>
+                </Space>
+              </div>
+            ))}
+          </Space>
+        </div>
+
+        <div>
+          <Typography.Text strong>关键证据</Typography.Text>
+          <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
+            {evidence.slice(-3).map((item) => (
+              <div key={item.id} style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12 }}>
+                <Space wrap>
+                  <Tag>{item.source_type}</Tag>
+                  <Typography.Text strong>{item.title || item.source_id}</Typography.Text>
+                  <Typography.Text type="secondary">score {item.score.toFixed(2)}</Typography.Text>
+                </Space>
+                <Typography.Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 8 }}>
+                  {item.snippet}
+                </Typography.Paragraph>
+              </div>
+            ))}
+          </Space>
+        </div>
+
+        <div>
+          <Typography.Text strong>评估结果</Typography.Text>
+          <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
+            {evaluations.slice(-3).map((item) => (
+              <div key={item.id} style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12 }}>
+                <Space wrap>
+                  <Tag color={item.verdict === 'pass' ? 'green' : item.verdict === 'retry' ? 'orange' : 'red'}>{item.verdict}</Tag>
+                  <Typography.Text>{item.reason}</Typography.Text>
+                </Space>
+                {item.next_action ? (
+                  <Typography.Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 8 }}>
+                    Next: {item.next_action}
+                  </Typography.Paragraph>
+                ) : null}
+              </div>
+            ))}
+          </Space>
+        </div>
+      </Space>
+    </Card>
   );
 }

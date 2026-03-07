@@ -5,27 +5,40 @@ import type { ReactNode } from 'react';
 
 type ProjectStateContextValue = {
   activeProjectId: string;
+  activeChangeBatchId: string;
   setActiveProjectId: (projectId: string) => void;
+  setActiveChangeBatchId: (changeBatchId: string) => void;
 };
 
 const ProjectStateContext = createContext<ProjectStateContextValue | undefined>(undefined);
 
 const STORAGE_KEY = 'superdev-studio-active-project';
+const CHANGE_BATCH_STORAGE_KEY = 'superdev-studio-active-change-batch';
 
 export function ProjectStateProvider({ children }: { children: ReactNode }) {
   const [activeProjectId, setActiveProjectIdState] = useState<string>(() => localStorage.getItem(STORAGE_KEY) ?? '');
+  const [activeChangeBatchId, setActiveChangeBatchIdState] = useState<string>(
+    () => localStorage.getItem(CHANGE_BATCH_STORAGE_KEY) ?? '',
+  );
 
   const setActiveProjectId = (projectId: string) => {
     setActiveProjectIdState(projectId);
     localStorage.setItem(STORAGE_KEY, projectId);
   };
 
+  const setActiveChangeBatchId = (changeBatchId: string) => {
+    setActiveChangeBatchIdState(changeBatchId);
+    localStorage.setItem(CHANGE_BATCH_STORAGE_KEY, changeBatchId);
+  };
+
   const value = useMemo(
     () => ({
       activeProjectId,
+      activeChangeBatchId,
       setActiveProjectId,
+      setActiveChangeBatchId,
     }),
-    [activeProjectId],
+    [activeChangeBatchId, activeProjectId],
   );
 
   return <ProjectStateContext.Provider value={value}>{children}</ProjectStateContext.Provider>;

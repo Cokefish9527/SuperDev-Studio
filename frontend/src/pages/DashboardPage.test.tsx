@@ -47,7 +47,7 @@ describe('DashboardPage', () => {
     renderWithProviders(<DashboardPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('产品运营概览')).toBeInTheDocument();
+      expect(screen.getByText('工作台总览')).toBeInTheDocument();
       expect(screen.getByText('Build auth service')).toBeInTheDocument();
       expect(screen.getByText('项目总数')).toBeInTheDocument();
     });

@@ -1,22 +1,43 @@
+import { Spin } from 'antd';
+import { lazy, Suspense, type ComponentType } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import AppShell from './components/AppShell';
-import ContextPage from './pages/ContextPage';
-import DashboardPage from './pages/DashboardPage';
-import KnowledgePage from './pages/KnowledgePage';
-import MemoryPage from './pages/MemoryPage';
-import PipelinePage from './pages/PipelinePage';
-import ProjectsPage from './pages/ProjectsPage';
+
+const DashboardPage = lazy(() => import('./pages/DashboardPage'));
+const ProjectsPage = lazy(() => import('./pages/ProjectsPage'));
+const ChangeCenterPage = lazy(() => import('./pages/ChangeCenterPage'));
+const PipelinePage = lazy(() => import('./pages/PipelinePage'));
+const ProjectSettingsPage = lazy(() => import('./pages/ProjectSettingsPage'));
+const ContextHubPage = lazy(() => import('./pages/ContextHubPage'));
+
+function PageFallback() {
+  return (
+    <div style={{ minHeight: 240, display: 'grid', placeItems: 'center' }}>
+      <Spin size="large" tip="页面加载中" />
+    </div>
+  );
+}
+
+function renderLazyPage(Component: ComponentType) {
+  return (
+    <Suspense fallback={<PageFallback />}>
+      <Component />
+    </Suspense>
+  );
+}
 
 export default function App() {
   return (
     <Routes>
       <Route element={<AppShell />}>
-        <Route path="/" element={<DashboardPage />} />
-        <Route path="/projects" element={<ProjectsPage />} />
-        <Route path="/pipeline" element={<PipelinePage />} />
-        <Route path="/memory" element={<MemoryPage />} />
-        <Route path="/knowledge" element={<KnowledgePage />} />
-        <Route path="/context" element={<ContextPage />} />
+        <Route path="/" element={renderLazyPage(DashboardPage)} />
+        <Route path="/projects" element={renderLazyPage(ProjectsPage)} />
+        <Route path="/changes" element={renderLazyPage(ChangeCenterPage)} />
+        <Route path="/pipeline" element={renderLazyPage(PipelinePage)} />
+        <Route path="/settings" element={renderLazyPage(ProjectSettingsPage)} />
+        <Route path="/context" element={renderLazyPage(ContextHubPage)} />
+        <Route path="/memory" element={<Navigate to="/context?tab=memory" replace />} />
+        <Route path="/knowledge" element={<Navigate to="/context?tab=knowledge" replace />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

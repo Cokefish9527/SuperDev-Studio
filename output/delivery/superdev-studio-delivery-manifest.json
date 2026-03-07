@@ -1,0 +1,62 @@
+{
+  "project_name": "superdev-studio",
+  "version": "2.0.1",
+  "generated_at": "2026-03-07T01:34:38",
+  "status": "incomplete",
+  "cicd_platform": "all",
+  "included_files": [
+    ".azure-pipelines.yml",
+    ".env.deploy.example",
+    ".github\\workflows\\cd.yml",
+    ".github\\workflows\\ci.yml",
+    ".gitlab-ci.yml",
+    "Jenkinsfile",
+    "bitbucket-pipelines.yml",
+    "output\\deploy\\all-secrets-checklist.md",
+    "output\\frontend\\app.js",
+    "output\\frontend\\index.html",
+    "output\\frontend\\styles.css",
+    "output\\superdev-studio-ai-prompt.md",
+    "output\\superdev-studio-architecture.md",
+    "output\\superdev-studio-code-review.md",
+    "output\\superdev-studio-execution-plan.md",
+    "output\\superdev-studio-frontend-blueprint.md",
+    "output\\superdev-studio-prd.md",
+    "output\\superdev-studio-research.md",
+    "output\\superdev-studio-uiux.md",
+    "prisma\\migrations\\20260307013438_init\\migration.sql"
+  ],
+  "missing_required": [
+    {
+      "path": "output\\superdev-studio-redteam.md",
+      "reason": "缺少红队报告"
+    },
+    {
+      "path": "output\\superdev-studio-quality-gate.md",
+      "reason": "缺少质量门禁报告"
+    },
+    {
+      "path": "output\\superdev-studio-task-execution.md",
+      "reason": "缺少 Spec 任务执行报告"
+    },
+    {
+      "path": "backend\\API_CONTRACT.md",
+      "reason": "缺少 API 契约"
+    },
+    {
+      "path": ".super-dev/changes/*/tasks.md",
+      "reason": "存在未完成 Spec 任务: 10"
+    }
+  ],
+  "spec_tasks": {
+    "task_files": 2,
+    "total": 10,
+    "completed": 0,
+    "pending": 10,
+    "in_progress": 0
+  },
+  "summary": {
+    "included_count": 20,
+    "missing_required_count": 5
+  }
+}

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>superdev-studio · Frontend Blueprint</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Sora:wght@400;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="bg-layer"></div>
+    <main class="shell">
+      <header class="hero">
+        <p class="eyebrow">Super Dev Frontend First Delivery</p>
+        <h1>superdev-studio</h1>
+        <p class="summary">Refactor SuperDev Studio into a change-driven delivery workspace. Unify the product IA around workspace, change center, delivery runs, context hub, and project settings. Persist project default execution profile. Add change batch and run traceability metadata. Upgrade the React plus Go app pages and APIs accordingly.</p>
+        <div class="meta">
+          <span>Framework: react</span>
+          <span>Mode: 需求文档驱动</span>
+          <span>Status: Ready</span>
+        </div>
+      </header>
+
+      <section class="card doc-hub">
+        <div class="section-head">
+          <h2>核心文档</h2>
+          <p>先完成文档，再以文档驱动实现。</p>
+        </div>
+        <div id="doc-links" class="doc-grid"></div>
+      </section>
+
+      <section class="card split">
+        <div>
+          <div class="section-head">
+            <h2>需求模块</h2>
+            <p>按需求生成页面和能力模块。</p>
+          </div>
+          <div id="requirements" class="chips"></div>
+        </div>
+        <div>
+          <div class="section-head">
+            <h2>执行路线</h2>
+            <p>从 0-1 到 1-N+1 的阶段推进。</p>
+          </div>
+          <ol id="timeline" class="timeline"></ol>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="section-head">
+          <h2>交付清单</h2>
+          <p>前端先行，随后进入系统化交付。</p>
+        </div>
+        <ul class="delivery-list">
+          <li>阶段 1: PRD / 架构 / UIUX 文档</li>
+          <li>阶段 2: 前端骨架与核心页面</li>
+          <li>阶段 3: 后端与数据库能力</li>
+          <li>阶段 4: 联调、测试、质量门禁</li>
+          <li>阶段 5: 发布、监控与迭代</li>
+        </ul>
+      </section>
+    </main>
+    <script src="./app.js"></script>
+  </body>
+</html>

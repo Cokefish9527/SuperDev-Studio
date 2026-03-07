@@ -156,3 +156,117 @@ func TestStore_AutoScheduleTasks(t *testing.T) {
 		t.Fatalf("expected done task estimated_days=0, got %d", doneTask.EstimatedDays)
 	}
 }
+
+func TestStore_AgentRuntimeFlow(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	project, err := s.CreateProject(ctx, Project{Name: "AgentRuntime"})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	run, err := s.CreatePipelineRun(ctx, PipelineRun{
+		ProjectID: project.ID,
+		Prompt:    "Build agent runtime",
+		Status:    "queued",
+		Stage:     "queued",
+	})
+	if err != nil {
+		t.Fatalf("create pipeline run: %v", err)
+	}
+
+	agentRun, err := s.CreateAgentRun(ctx, AgentRun{
+		PipelineRunID: run.ID,
+		ProjectID:     project.ID,
+		AgentName:     "delivery-agent",
+		ModeName:      "step_by_step",
+		Status:        "running",
+		CurrentNode:   "plan",
+	})
+	if err != nil {
+		t.Fatalf("create agent run: %v", err)
+	}
+
+	loadedRun, err := s.GetAgentRunByPipelineRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get agent run by pipeline run: %v", err)
+	}
+	if loadedRun.ID != agentRun.ID {
+		t.Fatalf("expected agent run id %s, got %s", agentRun.ID, loadedRun.ID)
+	}
+
+	step, err := s.CreateAgentStep(ctx, AgentStep{
+		AgentRunID: agentRun.ID,
+		NodeName:   "retrieve",
+		Title:      "Retrieve evidence",
+		InputJSON:  `{"query":"agent runtime"}`,
+	})
+	if err != nil {
+		t.Fatalf("create agent step: %v", err)
+	}
+
+	if _, err := s.CreateAgentToolCall(ctx, AgentToolCall{
+		AgentStepID:  step.ID,
+		ToolName:     "search_context",
+		RequestJSON:  `{"query":"agent runtime"}`,
+		ResponseJSON: `{"count":2}`,
+		Success:      true,
+		LatencyMS:    12,
+	}); err != nil {
+		t.Fatalf("create agent tool call: %v", err)
+	}
+
+	if _, err := s.CreateAgentEvidence(ctx, AgentEvidence{
+		AgentStepID:  step.ID,
+		SourceType:   "memory",
+		SourceID:     "mem-1",
+		Title:        "Run summary",
+		Snippet:      "Need agent runtime traceability",
+		Score:        0.92,
+		MetadataJSON: `{"role":"run-summary"}`,
+	}); err != nil {
+		t.Fatalf("create agent evidence: %v", err)
+	}
+
+	if _, err := s.CreateAgentEvaluation(ctx, AgentEvaluation{
+		AgentStepID:    step.ID,
+		EvaluationType: "step-outcome",
+		Verdict:        "pass",
+		Reason:         "evidence retrieved",
+		NextAction:     "plan_next_step",
+	}); err != nil {
+		t.Fatalf("create agent evaluation: %v", err)
+	}
+
+	steps, err := s.ListAgentSteps(ctx, agentRun.ID)
+	if err != nil {
+		t.Fatalf("list agent steps: %v", err)
+	}
+	if len(steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(steps))
+	}
+
+	toolCalls, err := s.ListAgentToolCalls(ctx, agentRun.ID)
+	if err != nil {
+		t.Fatalf("list agent tool calls: %v", err)
+	}
+	if len(toolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(toolCalls))
+	}
+
+	evidence, err := s.ListAgentEvidence(ctx, agentRun.ID)
+	if err != nil {
+		t.Fatalf("list agent evidence: %v", err)
+	}
+	if len(evidence) != 1 {
+		t.Fatalf("expected 1 evidence record, got %d", len(evidence))
+	}
+
+	evals, err := s.ListAgentEvaluations(ctx, agentRun.ID)
+	if err != nil {
+		t.Fatalf("list agent evaluations: %v", err)
+	}
+	if len(evals) != 1 {
+		t.Fatalf("expected 1 evaluation record, got %d", len(evals))
+	}
+}

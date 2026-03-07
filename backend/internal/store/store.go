@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -48,8 +49,30 @@ func (s *Store) migrate(ctx context.Context) error {
 			description TEXT NOT NULL DEFAULT '',
 			repo_path TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'active',
+			default_platform TEXT NOT NULL DEFAULT 'web',
+			default_frontend TEXT NOT NULL DEFAULT 'react',
+			default_backend TEXT NOT NULL DEFAULT 'go',
+			default_domain TEXT NOT NULL DEFAULT '',
+			default_context_mode TEXT NOT NULL DEFAULT 'auto',
+			default_context_token_budget INTEGER NOT NULL DEFAULT 1200,
+			default_context_max_items INTEGER NOT NULL DEFAULT 8,
+			default_context_dynamic INTEGER NOT NULL DEFAULT 1,
+			default_memory_writeback INTEGER NOT NULL DEFAULT 1,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS change_batches (
+			id TEXT PRIMARY KEY,
+			project_id TEXT NOT NULL,
+			title TEXT NOT NULL,
+			goal TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'draft',
+			mode TEXT NOT NULL DEFAULT 'step_by_step',
+			external_change_id TEXT NOT NULL DEFAULT '',
+			latest_run_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
 		);`,
 		`CREATE TABLE IF NOT EXISTS tasks (
 			id TEXT PRIMARY KEY,
@@ -69,7 +92,11 @@ func (s *Store) migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS pipeline_runs (
 			id TEXT PRIMARY KEY,
 			project_id TEXT NOT NULL,
+			change_batch_id TEXT NOT NULL DEFAULT '',
+			external_change_id TEXT NOT NULL DEFAULT '',
 			prompt TEXT NOT NULL,
+			llm_enhanced_loop INTEGER NOT NULL DEFAULT 0,
+			multimodal_assets TEXT NOT NULL DEFAULT '[]',
 			simulate INTEGER NOT NULL DEFAULT 1,
 			project_dir TEXT NOT NULL DEFAULT '',
 			platform TEXT NOT NULL DEFAULT '',
@@ -104,6 +131,77 @@ func (s *Store) migrate(ctx context.Context) error {
 			created_at TEXT NOT NULL,
 			FOREIGN KEY(run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
 		);`,
+		`CREATE TABLE IF NOT EXISTS agent_runs (
+			id TEXT PRIMARY KEY,
+			pipeline_run_id TEXT NOT NULL,
+			project_id TEXT NOT NULL,
+			change_batch_id TEXT NOT NULL DEFAULT '',
+			agent_name TEXT NOT NULL,
+			mode_name TEXT NOT NULL,
+			status TEXT NOT NULL,
+			current_node TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '',
+			started_at TEXT,
+			finished_at TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY(pipeline_run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE,
+			FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS agent_steps (
+			id TEXT PRIMARY KEY,
+			agent_run_id TEXT NOT NULL,
+			step_index INTEGER NOT NULL,
+			node_name TEXT NOT NULL,
+			title TEXT NOT NULL DEFAULT '',
+			input_json TEXT NOT NULL DEFAULT '{}',
+			output_json TEXT NOT NULL DEFAULT '{}',
+			decision_summary TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			started_at TEXT,
+			finished_at TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY(agent_run_id) REFERENCES agent_runs(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS agent_tool_calls (
+			id TEXT PRIMARY KEY,
+			agent_step_id TEXT NOT NULL,
+			tool_name TEXT NOT NULL,
+			request_json TEXT NOT NULL DEFAULT '{}',
+			response_json TEXT NOT NULL DEFAULT '{}',
+			success INTEGER NOT NULL DEFAULT 0,
+			latency_ms INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			FOREIGN KEY(agent_step_id) REFERENCES agent_steps(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS agent_evidence (
+			id TEXT PRIMARY KEY,
+			agent_step_id TEXT NOT NULL,
+			source_type TEXT NOT NULL,
+			source_id TEXT NOT NULL DEFAULT '',
+			title TEXT NOT NULL DEFAULT '',
+			snippet TEXT NOT NULL DEFAULT '',
+			score REAL NOT NULL DEFAULT 0,
+			metadata_json TEXT NOT NULL DEFAULT '{}',
+			created_at TEXT NOT NULL,
+			FOREIGN KEY(agent_step_id) REFERENCES agent_steps(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS agent_evaluations (
+			id TEXT PRIMARY KEY,
+			agent_step_id TEXT NOT NULL,
+			evaluation_type TEXT NOT NULL,
+			verdict TEXT NOT NULL,
+			reason TEXT NOT NULL DEFAULT '',
+			next_action TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			FOREIGN KEY(agent_step_id) REFERENCES agent_steps(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_runs_pipeline_run_id ON agent_runs(pipeline_run_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_steps_agent_run_id ON agent_steps(agent_run_id, step_index);`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_tool_calls_agent_step_id ON agent_tool_calls(agent_step_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_evidence_agent_step_id ON agent_evidence(agent_step_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_evaluations_agent_step_id ON agent_evaluations(agent_step_id);`,
 		`CREATE TABLE IF NOT EXISTS memories (
 			id TEXT PRIMARY KEY,
 			project_id TEXT NOT NULL,
@@ -134,6 +232,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_change_batches_project_id ON change_batches(project_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_pipeline_runs_project_id ON pipeline_runs(project_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_memories_project_id ON memories(project_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_knowledge_documents_project_id ON knowledge_documents(project_id);`,
@@ -147,6 +246,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 
 	if err := s.ensurePipelineRunColumns(ctx); err != nil {
+		return err
+	}
+	if err := s.ensureProjectColumns(ctx); err != nil {
 		return err
 	}
 	if err := s.ensureTaskColumns(ctx); err != nil {
@@ -168,6 +270,10 @@ func (s *Store) ensurePipelineRunColumns(ctx context.Context) error {
 		name       string
 		definition string
 	}{
+		{name: "change_batch_id", definition: "TEXT NOT NULL DEFAULT ''"},
+		{name: "external_change_id", definition: "TEXT NOT NULL DEFAULT ''"},
+		{name: "llm_enhanced_loop", definition: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "multimodal_assets", definition: "TEXT NOT NULL DEFAULT '[]'"},
 		{name: "simulate", definition: "INTEGER NOT NULL DEFAULT 1"},
 		{name: "project_dir", definition: "TEXT NOT NULL DEFAULT ''"},
 		{name: "platform", definition: "TEXT NOT NULL DEFAULT ''"},
@@ -187,6 +293,29 @@ func (s *Store) ensurePipelineRunColumns(ctx context.Context) error {
 	}
 	for _, column := range columns {
 		if err := s.ensureTableColumn(ctx, "pipeline_runs", column.name, column.definition); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureProjectColumns(ctx context.Context) error {
+	columns := []struct {
+		name       string
+		definition string
+	}{
+		{name: "default_platform", definition: "TEXT NOT NULL DEFAULT 'web'"},
+		{name: "default_frontend", definition: "TEXT NOT NULL DEFAULT 'react'"},
+		{name: "default_backend", definition: "TEXT NOT NULL DEFAULT 'go'"},
+		{name: "default_domain", definition: "TEXT NOT NULL DEFAULT ''"},
+		{name: "default_context_mode", definition: "TEXT NOT NULL DEFAULT 'auto'"},
+		{name: "default_context_token_budget", definition: "INTEGER NOT NULL DEFAULT 1200"},
+		{name: "default_context_max_items", definition: "INTEGER NOT NULL DEFAULT 8"},
+		{name: "default_context_dynamic", definition: "INTEGER NOT NULL DEFAULT 1"},
+		{name: "default_memory_writeback", definition: "INTEGER NOT NULL DEFAULT 1"},
+	}
+	for _, column := range columns {
+		if err := s.ensureTableColumn(ctx, "projects", column.name, column.definition); err != nil {
 			return err
 		}
 	}
@@ -301,25 +430,205 @@ func joinTags(tags []string) string {
 	return strings.Join(cleaned, ",")
 }
 
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func applyProjectDefaults(project *Project) {
+	if strings.TrimSpace(project.Status) == "" {
+		project.Status = "active"
+	}
+	if strings.TrimSpace(project.DefaultPlatform) == "" {
+		project.DefaultPlatform = "web"
+	}
+	if strings.TrimSpace(project.DefaultFrontend) == "" {
+		project.DefaultFrontend = "react"
+	}
+	if strings.TrimSpace(project.DefaultBackend) == "" {
+		project.DefaultBackend = "go"
+	}
+	if strings.TrimSpace(project.DefaultContextMode) == "" {
+		project.DefaultContextMode = "auto"
+	}
+	if project.DefaultContextTokenBudget <= 0 {
+		project.DefaultContextTokenBudget = 1200
+	}
+	if project.DefaultContextMaxItems <= 0 {
+		project.DefaultContextMaxItems = 8
+	}
+}
+
+func scanProject(scanner rowScanner, project *Project) error {
+	var createdRaw, updatedRaw string
+	var contextDynamicRaw, memoryWritebackRaw int
+	if err := scanner.Scan(
+		&project.ID,
+		&project.Name,
+		&project.Description,
+		&project.RepoPath,
+		&project.Status,
+		&project.DefaultPlatform,
+		&project.DefaultFrontend,
+		&project.DefaultBackend,
+		&project.DefaultDomain,
+		&project.DefaultContextMode,
+		&project.DefaultContextTokenBudget,
+		&project.DefaultContextMaxItems,
+		&contextDynamicRaw,
+		&memoryWritebackRaw,
+		&createdRaw,
+		&updatedRaw,
+	); err != nil {
+		return err
+	}
+	project.DefaultContextDynamic = intToBool(contextDynamicRaw)
+	project.DefaultMemoryWriteback = intToBool(memoryWritebackRaw)
+	createdAt, err := parseTime(createdRaw)
+	if err != nil {
+		return err
+	}
+	updatedAt, err := parseTime(updatedRaw)
+	if err != nil {
+		return err
+	}
+	project.CreatedAt = createdAt
+	project.UpdatedAt = updatedAt
+	applyProjectDefaults(project)
+	return nil
+}
+
+func scanPipelineRun(scanner rowScanner, run *PipelineRun) error {
+	var createdRaw, updatedRaw string
+	var startedRaw, finishedRaw sql.NullString
+	var multimodalAssetsRaw string
+	var simulateRaw, llmEnhancedLoopRaw, contextDynamicRaw, memoryWritebackRaw, fullCycleRaw, stepByStepRaw int
+	if err := scanner.Scan(
+		&run.ID,
+		&run.ProjectID,
+		&run.ChangeBatchID,
+		&run.ExternalChangeID,
+		&run.Prompt,
+		&llmEnhancedLoopRaw,
+		&multimodalAssetsRaw,
+		&simulateRaw,
+		&run.ProjectDir,
+		&run.Platform,
+		&run.Frontend,
+		&run.Backend,
+		&run.Domain,
+		&run.ContextMode,
+		&run.ContextQuery,
+		&run.ContextTokenBudget,
+		&run.ContextMaxItems,
+		&contextDynamicRaw,
+		&memoryWritebackRaw,
+		&fullCycleRaw,
+		&stepByStepRaw,
+		&run.IterationLimit,
+		&run.RetryOf,
+		&run.Status,
+		&run.Progress,
+		&run.Stage,
+		&createdRaw,
+		&updatedRaw,
+		&startedRaw,
+		&finishedRaw,
+	); err != nil {
+		return err
+	}
+	run.LLMEnhancedLoop = intToBool(llmEnhancedLoopRaw)
+	run.MultimodalAssets = decodeStringSlice(multimodalAssetsRaw)
+	run.Simulate = intToBool(simulateRaw)
+	run.ContextDynamic = intToBool(contextDynamicRaw)
+	run.MemoryWriteback = intToBool(memoryWritebackRaw)
+	run.FullCycle = intToBool(fullCycleRaw)
+	run.StepByStep = intToBool(stepByStepRaw)
+	createdAt, err := parseTime(createdRaw)
+	if err != nil {
+		return err
+	}
+	updatedAt, err := parseTime(updatedRaw)
+	if err != nil {
+		return err
+	}
+	run.CreatedAt = createdAt
+	run.UpdatedAt = updatedAt
+	if startedRaw.Valid {
+		startedAt, parseErr := parseTime(startedRaw.String)
+		if parseErr == nil {
+			run.StartedAt = &startedAt
+		}
+	}
+	if finishedRaw.Valid {
+		finishedAt, parseErr := parseTime(finishedRaw.String)
+		if parseErr == nil {
+			run.FinishedAt = &finishedAt
+		}
+	}
+	return nil
+}
+
+func scanChangeBatch(scanner rowScanner, batch *ChangeBatch) error {
+	var createdRaw, updatedRaw string
+	if err := scanner.Scan(
+		&batch.ID,
+		&batch.ProjectID,
+		&batch.Title,
+		&batch.Goal,
+		&batch.Status,
+		&batch.Mode,
+		&batch.ExternalChangeID,
+		&batch.LatestRunID,
+		&createdRaw,
+		&updatedRaw,
+	); err != nil {
+		return err
+	}
+	createdAt, err := parseTime(createdRaw)
+	if err != nil {
+		return err
+	}
+	updatedAt, err := parseTime(updatedRaw)
+	if err != nil {
+		return err
+	}
+	batch.CreatedAt = createdAt
+	batch.UpdatedAt = updatedAt
+	return nil
+}
+
 func (s *Store) CreateProject(ctx context.Context, p Project) (Project, error) {
 	now := nowUTC()
 	if p.ID == "" {
 		p.ID = uuid.NewString()
 	}
-	if p.Status == "" {
-		p.Status = "active"
-	}
+	applyProjectDefaults(&p)
 	p.CreatedAt = now
 	p.UpdatedAt = now
 
 	_, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO projects(id, name, description, repo_path, status, created_at, updated_at) VALUES(?,?,?,?,?,?,?)`,
+		`INSERT INTO projects(
+			id, name, description, repo_path, status,
+			default_platform, default_frontend, default_backend, default_domain,
+			default_context_mode, default_context_token_budget, default_context_max_items,
+			default_context_dynamic, default_memory_writeback,
+			created_at, updated_at
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.ID,
 		p.Name,
 		p.Description,
 		p.RepoPath,
 		p.Status,
+		p.DefaultPlatform,
+		p.DefaultFrontend,
+		p.DefaultBackend,
+		p.DefaultDomain,
+		p.DefaultContextMode,
+		p.DefaultContextTokenBudget,
+		p.DefaultContextMaxItems,
+		boolToInt(p.DefaultContextDynamic),
+		boolToInt(p.DefaultMemoryWriteback),
 		formatTime(p.CreatedAt),
 		formatTime(p.UpdatedAt),
 	)
@@ -332,7 +641,13 @@ func (s *Store) CreateProject(ctx context.Context, p Project) (Project, error) {
 func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, name, description, repo_path, status, created_at, updated_at FROM projects ORDER BY updated_at DESC`,
+		`SELECT
+			id, name, description, repo_path, status,
+			default_platform, default_frontend, default_backend, default_domain,
+			default_context_mode, default_context_token_budget, default_context_max_items,
+			default_context_dynamic, default_memory_writeback,
+			created_at, updated_at
+		 FROM projects ORDER BY updated_at DESC`,
 	)
 	if err != nil {
 		return nil, err
@@ -342,16 +657,7 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	projects := []Project{}
 	for rows.Next() {
 		var p Project
-		var createdRaw, updatedRaw string
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.RepoPath, &p.Status, &createdRaw, &updatedRaw); err != nil {
-			return nil, err
-		}
-		p.CreatedAt, err = parseTime(createdRaw)
-		if err != nil {
-			return nil, err
-		}
-		p.UpdatedAt, err = parseTime(updatedRaw)
-		if err != nil {
+		if err := scanProject(rows, &p); err != nil {
 			return nil, err
 		}
 		projects = append(projects, p)
@@ -361,51 +667,96 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 
 func (s *Store) GetProject(ctx context.Context, projectID string) (Project, error) {
 	var p Project
-	var createdRaw, updatedRaw string
-	err := s.db.QueryRowContext(
-		ctx,
-		`SELECT id, name, description, repo_path, status, created_at, updated_at FROM projects WHERE id = ?`,
-		projectID,
-	).Scan(&p.ID, &p.Name, &p.Description, &p.RepoPath, &p.Status, &createdRaw, &updatedRaw)
-	if err != nil {
+	if err := scanProject(
+		s.db.QueryRowContext(
+			ctx,
+			`SELECT
+				id, name, description, repo_path, status,
+				default_platform, default_frontend, default_backend, default_domain,
+				default_context_mode, default_context_token_budget, default_context_max_items,
+				default_context_dynamic, default_memory_writeback,
+				created_at, updated_at
+			 FROM projects WHERE id = ?`,
+			projectID,
+		),
+		&p,
+	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Project{}, ErrNotFound
 		}
-		return Project{}, err
-	}
-	p.CreatedAt, err = parseTime(createdRaw)
-	if err != nil {
-		return Project{}, err
-	}
-	p.UpdatedAt, err = parseTime(updatedRaw)
-	if err != nil {
 		return Project{}, err
 	}
 	return p, nil
 }
 
 func (s *Store) UpdateProject(ctx context.Context, projectID, name, description, repoPath, status string) (Project, error) {
+	return s.UpdateProjectWithDefaults(ctx, projectID, Project{
+		Name:        name,
+		Description: description,
+		RepoPath:    repoPath,
+		Status:      status,
+	})
+}
+
+func (s *Store) UpdateProjectWithDefaults(ctx context.Context, projectID string, patch Project) (Project, error) {
 	p, err := s.GetProject(ctx, projectID)
 	if err != nil {
 		return Project{}, err
 	}
-	if name != "" {
-		p.Name = name
+	if strings.TrimSpace(patch.Name) != "" {
+		p.Name = patch.Name
 	}
-	p.Description = description
-	p.RepoPath = repoPath
-	if status != "" {
-		p.Status = status
+	p.Description = patch.Description
+	p.RepoPath = patch.RepoPath
+	if strings.TrimSpace(patch.Status) != "" {
+		p.Status = patch.Status
 	}
+	if strings.TrimSpace(patch.DefaultPlatform) != "" {
+		p.DefaultPlatform = patch.DefaultPlatform
+	}
+	if strings.TrimSpace(patch.DefaultFrontend) != "" {
+		p.DefaultFrontend = patch.DefaultFrontend
+	}
+	if strings.TrimSpace(patch.DefaultBackend) != "" {
+		p.DefaultBackend = patch.DefaultBackend
+	}
+	p.DefaultDomain = patch.DefaultDomain
+	if strings.TrimSpace(patch.DefaultContextMode) != "" {
+		p.DefaultContextMode = patch.DefaultContextMode
+	}
+	if patch.DefaultContextTokenBudget > 0 {
+		p.DefaultContextTokenBudget = patch.DefaultContextTokenBudget
+	}
+	if patch.DefaultContextMaxItems > 0 {
+		p.DefaultContextMaxItems = patch.DefaultContextMaxItems
+	}
+	p.DefaultContextDynamic = patch.DefaultContextDynamic
+	p.DefaultMemoryWriteback = patch.DefaultMemoryWriteback
+	applyProjectDefaults(&p)
 	p.UpdatedAt = nowUTC()
 
 	_, err = s.db.ExecContext(
 		ctx,
-		`UPDATE projects SET name=?, description=?, repo_path=?, status=?, updated_at=? WHERE id=?`,
+		`UPDATE projects SET
+			name=?, description=?, repo_path=?, status=?,
+			default_platform=?, default_frontend=?, default_backend=?, default_domain=?,
+			default_context_mode=?, default_context_token_budget=?, default_context_max_items=?,
+			default_context_dynamic=?, default_memory_writeback=?,
+			updated_at=?
+		 WHERE id=?`,
 		p.Name,
 		p.Description,
 		p.RepoPath,
 		p.Status,
+		p.DefaultPlatform,
+		p.DefaultFrontend,
+		p.DefaultBackend,
+		p.DefaultDomain,
+		p.DefaultContextMode,
+		p.DefaultContextTokenBudget,
+		p.DefaultContextMaxItems,
+		boolToInt(p.DefaultContextDynamic),
+		boolToInt(p.DefaultMemoryWriteback),
 		formatTime(p.UpdatedAt),
 		p.ID,
 	)
@@ -413,6 +764,112 @@ func (s *Store) UpdateProject(ctx context.Context, projectID, name, description,
 		return Project{}, err
 	}
 	return p, nil
+}
+
+func (s *Store) CreateChangeBatch(ctx context.Context, batch ChangeBatch) (ChangeBatch, error) {
+	now := nowUTC()
+	if batch.ID == "" {
+		batch.ID = uuid.NewString()
+	}
+	if strings.TrimSpace(batch.Status) == "" {
+		batch.Status = "draft"
+	}
+	if strings.TrimSpace(batch.Mode) == "" {
+		batch.Mode = "step_by_step"
+	}
+	batch.CreatedAt = now
+	batch.UpdatedAt = now
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO change_batches(
+			id, project_id, title, goal, status, mode, external_change_id, latest_run_id, created_at, updated_at
+		) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		batch.ID,
+		batch.ProjectID,
+		batch.Title,
+		batch.Goal,
+		batch.Status,
+		batch.Mode,
+		batch.ExternalChangeID,
+		batch.LatestRunID,
+		formatTime(batch.CreatedAt),
+		formatTime(batch.UpdatedAt),
+	)
+	if err != nil {
+		return ChangeBatch{}, err
+	}
+	return batch, nil
+}
+
+func (s *Store) ListChangeBatches(ctx context.Context, projectID string) ([]ChangeBatch, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, project_id, title, goal, status, mode, external_change_id, latest_run_id, created_at, updated_at
+		 FROM change_batches WHERE project_id=? ORDER BY updated_at DESC`,
+		projectID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ChangeBatch{}
+	for rows.Next() {
+		var batch ChangeBatch
+		if err := scanChangeBatch(rows, &batch); err != nil {
+			return nil, err
+		}
+		items = append(items, batch)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) GetChangeBatch(ctx context.Context, batchID string) (ChangeBatch, error) {
+	var batch ChangeBatch
+	if err := scanChangeBatch(
+		s.db.QueryRowContext(
+			ctx,
+			`SELECT id, project_id, title, goal, status, mode, external_change_id, latest_run_id, created_at, updated_at
+			 FROM change_batches WHERE id = ?`,
+			batchID,
+		),
+		&batch,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ChangeBatch{}, ErrNotFound
+		}
+		return ChangeBatch{}, err
+	}
+	return batch, nil
+}
+
+func (s *Store) UpdateChangeBatch(ctx context.Context, batchID, status, latestRunID, externalChangeID string) (ChangeBatch, error) {
+	batch, err := s.GetChangeBatch(ctx, batchID)
+	if err != nil {
+		return ChangeBatch{}, err
+	}
+	if strings.TrimSpace(status) != "" {
+		batch.Status = status
+	}
+	if strings.TrimSpace(latestRunID) != "" {
+		batch.LatestRunID = latestRunID
+	}
+	if strings.TrimSpace(externalChangeID) != "" {
+		batch.ExternalChangeID = externalChangeID
+	}
+	batch.UpdatedAt = nowUTC()
+	_, err = s.db.ExecContext(
+		ctx,
+		`UPDATE change_batches SET status=?, latest_run_id=?, external_change_id=?, updated_at=? WHERE id=?`,
+		batch.Status,
+		batch.LatestRunID,
+		batch.ExternalChangeID,
+		formatTime(batch.UpdatedAt),
+		batch.ID,
+	)
+	if err != nil {
+		return ChangeBatch{}, err
+	}
+	return batch, nil
 }
 
 func (s *Store) DeleteProject(ctx context.Context, projectID string) error {
@@ -774,14 +1231,19 @@ func (s *Store) CreatePipelineRun(ctx context.Context, r PipelineRun) (PipelineR
 	_, err := s.db.ExecContext(
 		ctx,
 		`INSERT INTO pipeline_runs(
-			id, project_id, prompt,
+			id, project_id, change_batch_id, external_change_id, prompt,
+			llm_enhanced_loop, multimodal_assets,
 			simulate, project_dir, platform, frontend, backend, domain,
 			context_mode, context_query, context_token_budget, context_max_items, context_dynamic, memory_writeback, full_cycle, step_by_step, iteration_limit, retry_of,
 			status, progress, stage, created_at, updated_at, started_at, finished_at
-		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.ID,
 		r.ProjectID,
+		r.ChangeBatchID,
+		r.ExternalChangeID,
 		r.Prompt,
+		boolToInt(r.LLMEnhancedLoop),
+		encodeStringSlice(r.MultimodalAssets),
 		boolToInt(r.Simulate),
 		r.ProjectDir,
 		r.Platform,
@@ -834,78 +1296,34 @@ func (s *Store) UpdatePipelineRun(ctx context.Context, runID, status, stage stri
 	return err
 }
 
+func (s *Store) SetPipelineRunExternalChangeID(ctx context.Context, runID, externalChangeID string) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE pipeline_runs SET external_change_id=?, updated_at=? WHERE id=?`,
+		strings.TrimSpace(externalChangeID),
+		formatTime(nowUTC()),
+		runID,
+	)
+	return err
+}
+
 func (s *Store) GetPipelineRun(ctx context.Context, runID string) (PipelineRun, error) {
 	var r PipelineRun
-	var createdRaw, updatedRaw string
-	var startedRaw, finishedRaw sql.NullString
-	var simulateRaw, contextDynamicRaw, memoryWritebackRaw, fullCycleRaw, stepByStepRaw int
-	err := s.db.QueryRowContext(
+	if err := scanPipelineRun(s.db.QueryRowContext(
 		ctx,
 		`SELECT
-			id, project_id, prompt,
+			id, project_id, change_batch_id, external_change_id, prompt,
+			llm_enhanced_loop, multimodal_assets,
 			simulate, project_dir, platform, frontend, backend, domain,
 			context_mode, context_query, context_token_budget, context_max_items, context_dynamic, memory_writeback, full_cycle, step_by_step, iteration_limit, retry_of,
 			status, progress, stage, created_at, updated_at, started_at, finished_at
 		FROM pipeline_runs WHERE id = ?`,
 		runID,
-	).Scan(
-		&r.ID,
-		&r.ProjectID,
-		&r.Prompt,
-		&simulateRaw,
-		&r.ProjectDir,
-		&r.Platform,
-		&r.Frontend,
-		&r.Backend,
-		&r.Domain,
-		&r.ContextMode,
-		&r.ContextQuery,
-		&r.ContextTokenBudget,
-		&r.ContextMaxItems,
-		&contextDynamicRaw,
-		&memoryWritebackRaw,
-		&fullCycleRaw,
-		&stepByStepRaw,
-		&r.IterationLimit,
-		&r.RetryOf,
-		&r.Status,
-		&r.Progress,
-		&r.Stage,
-		&createdRaw,
-		&updatedRaw,
-		&startedRaw,
-		&finishedRaw,
-	)
-	if err != nil {
+	), &r); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return PipelineRun{}, ErrNotFound
 		}
 		return PipelineRun{}, err
-	}
-	r.Simulate = intToBool(simulateRaw)
-	r.ContextDynamic = intToBool(contextDynamicRaw)
-	r.MemoryWriteback = intToBool(memoryWritebackRaw)
-	r.FullCycle = intToBool(fullCycleRaw)
-	r.StepByStep = intToBool(stepByStepRaw)
-	r.CreatedAt, err = parseTime(createdRaw)
-	if err != nil {
-		return PipelineRun{}, err
-	}
-	r.UpdatedAt, err = parseTime(updatedRaw)
-	if err != nil {
-		return PipelineRun{}, err
-	}
-	if startedRaw.Valid {
-		started, parseErr := parseTime(startedRaw.String)
-		if parseErr == nil {
-			r.StartedAt = &started
-		}
-	}
-	if finishedRaw.Valid {
-		finished, parseErr := parseTime(finishedRaw.String)
-		if parseErr == nil {
-			r.FinishedAt = &finished
-		}
 	}
 	return r, nil
 }
@@ -917,7 +1335,8 @@ func (s *Store) ListPipelineRuns(ctx context.Context, projectID string, limit in
 	rows, err := s.db.QueryContext(
 		ctx,
 		`SELECT
-			id, project_id, prompt,
+			id, project_id, change_batch_id, external_change_id, prompt,
+			llm_enhanced_loop, multimodal_assets,
 			simulate, project_dir, platform, frontend, backend, domain,
 			context_mode, context_query, context_token_budget, context_max_items, context_dynamic, memory_writeback, full_cycle, step_by_step, iteration_limit, retry_of,
 			status, progress, stage, created_at, updated_at, started_at, finished_at
@@ -932,63 +1351,8 @@ func (s *Store) ListPipelineRuns(ctx context.Context, projectID string, limit in
 	items := []PipelineRun{}
 	for rows.Next() {
 		var r PipelineRun
-		var createdRaw, updatedRaw string
-		var startedRaw, finishedRaw sql.NullString
-		var simulateRaw, contextDynamicRaw, memoryWritebackRaw, fullCycleRaw, stepByStepRaw int
-		if err := rows.Scan(
-			&r.ID,
-			&r.ProjectID,
-			&r.Prompt,
-			&simulateRaw,
-			&r.ProjectDir,
-			&r.Platform,
-			&r.Frontend,
-			&r.Backend,
-			&r.Domain,
-			&r.ContextMode,
-			&r.ContextQuery,
-			&r.ContextTokenBudget,
-			&r.ContextMaxItems,
-			&contextDynamicRaw,
-			&memoryWritebackRaw,
-			&fullCycleRaw,
-			&stepByStepRaw,
-			&r.IterationLimit,
-			&r.RetryOf,
-			&r.Status,
-			&r.Progress,
-			&r.Stage,
-			&createdRaw,
-			&updatedRaw,
-			&startedRaw,
-			&finishedRaw,
-		); err != nil {
+		if err := scanPipelineRun(rows, &r); err != nil {
 			return nil, err
-		}
-		r.Simulate = intToBool(simulateRaw)
-		r.ContextDynamic = intToBool(contextDynamicRaw)
-		r.MemoryWriteback = intToBool(memoryWritebackRaw)
-		r.FullCycle = intToBool(fullCycleRaw)
-		r.StepByStep = intToBool(stepByStepRaw)
-		r.CreatedAt, err = parseTime(createdRaw)
-		if err != nil {
-			return nil, err
-		}
-		r.UpdatedAt, err = parseTime(updatedRaw)
-		if err != nil {
-			return nil, err
-		}
-		if startedRaw.Valid {
-			started, parseErr := parseTime(startedRaw.String)
-			if parseErr == nil {
-				r.StartedAt = &started
-			}
-		}
-		if finishedRaw.Valid {
-			finished, parseErr := parseTime(finishedRaw.String)
-			if parseErr == nil {
-				r.FinishedAt = &finished
-			}
 		}
 		items = append(items, r)
 	}
@@ -1016,6 +1380,29 @@ func (s *Store) AppendRunEvent(ctx context.Context, event RunEvent) (RunEvent, e
 		event.ID = id
 	}
 	return event, nil
+}
+
+func encodeStringSlice(items []string) string {
+	if len(items) == 0 {
+		return "[]"
+	}
+	payload, err := json.Marshal(items)
+	if err != nil {
+		return "[]"
+	}
+	return string(payload)
+}
+
+func decodeStringSlice(raw string) []string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	var items []string
+	if err := json.Unmarshal([]byte(trimmed), &items); err != nil {
+		return nil
+	}
+	return items
 }
 
 func (s *Store) ListRunEvents(ctx context.Context, runID string) ([]RunEvent, error) {

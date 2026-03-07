@@ -8,37 +8,50 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"superdevstudio/internal/agentruntime/eino"
 	"superdevstudio/internal/api"
 	"superdevstudio/internal/contextopt"
 	"superdevstudio/internal/llm"
 	"superdevstudio/internal/pipeline"
+	"superdevstudio/internal/retrieval"
 	"superdevstudio/internal/store"
 )
 
 type Config struct {
-	Addr              string
-	DBPath            string
-	SuperDevCmd       string
-	SuperDevWorkdir   string
-	VolcengineAPIKey  string
-	VolcengineModel   string
-	VolcengineBaseURL string
+	Addr                string
+	DBPath              string
+	SuperDevCmd         string
+	SuperDevWorkdir     string
+	VolcengineAPIKey    string
+	VolcengineModel     string
+	VolcengineBaseURL   string
+	APIRateLimitEnabled bool
+	APIRateLimitWindow  time.Duration
+	APIMutationLimit    int
+	APIExpensiveLimit   int
+	APIPipelineLimit    int
 }
 
 func LoadConfig() Config {
 	loadDotEnv()
 
 	return Config{
-		Addr:              envOrDefault("SUPERDEV_STUDIO_ADDR", ":8080"),
-		DBPath:            envOrDefault("SUPERDEV_STUDIO_DB", "./data/superdev_studio.db"),
-		SuperDevCmd:       envOrDefault("SUPER_DEV_CMD", "python -m super_dev.cli"),
-		SuperDevWorkdir:   envOrDefault("SUPER_DEV_WORKDIR", ""),
-		VolcengineAPIKey:  envOrDefault("VOLCENGINE_ARK_API_KEY", ""),
-		VolcengineModel:   envOrDefault("VOLCENGINE_ARK_MODEL", ""),
-		VolcengineBaseURL: envOrDefault("VOLCENGINE_ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"),
+		Addr:                envOrDefault("SUPERDEV_STUDIO_ADDR", ":8080"),
+		DBPath:              envOrDefault("SUPERDEV_STUDIO_DB", "./data/superdev_studio.db"),
+		SuperDevCmd:         envOrDefault("SUPER_DEV_CMD", "python -m super_dev.cli"),
+		SuperDevWorkdir:     envOrDefault("SUPER_DEV_WORKDIR", ""),
+		VolcengineAPIKey:    envOrDefault("VOLCENGINE_ARK_API_KEY", ""),
+		VolcengineModel:     envOrDefault("VOLCENGINE_ARK_MODEL", ""),
+		VolcengineBaseURL:   envOrDefault("VOLCENGINE_ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"),
+		APIRateLimitEnabled: envBoolOrDefault("SUPERDEV_STUDIO_API_RATE_LIMIT_ENABLED", true),
+		APIRateLimitWindow:  envDurationOrDefault("SUPERDEV_STUDIO_API_RATE_LIMIT_WINDOW", time.Minute),
+		APIMutationLimit:    envIntOrDefault("SUPERDEV_STUDIO_API_RATE_LIMIT_MUTATION", 24),
+		APIExpensiveLimit:   envIntOrDefault("SUPERDEV_STUDIO_API_RATE_LIMIT_EXPENSIVE", 10),
+		APIPipelineLimit:    envIntOrDefault("SUPERDEV_STUDIO_API_RATE_LIMIT_PIPELINE", 6),
 	}
 }
 
@@ -110,6 +123,42 @@ func envOrDefault(key, fallback string) string {
 	return value
 }
 
+func envIntOrDefault(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func envBoolOrDefault(key string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func envDurationOrDefault(key string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
 type App struct {
 	cfg        Config
 	store      *store.Store
@@ -135,7 +184,24 @@ func New(cfg Config) (*App, error) {
 	if volcAdvisor.Enabled() {
 		pipelineManager.SetLLMAdvisor(volcAdvisor)
 	}
-	apiServer := api.NewServer(s, pipelineManager, contextOpt)
+	retrievalService := retrieval.NewService(s)
+	einoRuntime, einoErr := eino.New(context.Background(), s, retrievalService, eino.Config{
+		APIKey:  cfg.VolcengineAPIKey,
+		Model:   cfg.VolcengineModel,
+		BaseURL: cfg.VolcengineBaseURL,
+	})
+	if einoErr == nil && einoRuntime != nil {
+		pipelineManager.SetAgentRuntime(einoRuntime)
+	}
+	apiServer := api.NewServerWithConfig(s, pipelineManager, contextOpt, api.ServerConfig{
+		RateLimit: api.RateLimitConfig{
+			Enabled:        cfg.APIRateLimitEnabled,
+			Window:         cfg.APIRateLimitWindow,
+			MutationLimit:  cfg.APIMutationLimit,
+			ExpensiveLimit: cfg.APIExpensiveLimit,
+			PipelineLimit:  cfg.APIPipelineLimit,
+		},
+	})
 
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,

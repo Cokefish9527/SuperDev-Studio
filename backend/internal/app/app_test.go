@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestParseDotEnvLine(t *testing.T) {
@@ -122,5 +123,30 @@ func TestLoadConfigReadsDotEnv(t *testing.T) {
 	}
 	if cfg.VolcengineModel != "ep-from-dotenv" {
 		t.Fatalf("expected model from dotenv, got %s", cfg.VolcengineModel)
+	}
+}
+
+func TestLoadConfigReadsRateLimitEnv(t *testing.T) {
+	t.Setenv("SUPERDEV_STUDIO_API_RATE_LIMIT_ENABLED", "false")
+	t.Setenv("SUPERDEV_STUDIO_API_RATE_LIMIT_WINDOW", "90s")
+	t.Setenv("SUPERDEV_STUDIO_API_RATE_LIMIT_MUTATION", "12")
+	t.Setenv("SUPERDEV_STUDIO_API_RATE_LIMIT_EXPENSIVE", "5")
+	t.Setenv("SUPERDEV_STUDIO_API_RATE_LIMIT_PIPELINE", "3")
+
+	cfg := LoadConfig()
+	if cfg.APIRateLimitEnabled {
+		t.Fatalf("expected api rate limit to be disabled via env")
+	}
+	if cfg.APIRateLimitWindow != 90*time.Second {
+		t.Fatalf("expected api rate limit window 90s, got %s", cfg.APIRateLimitWindow)
+	}
+	if cfg.APIMutationLimit != 12 {
+		t.Fatalf("expected mutation limit 12, got %d", cfg.APIMutationLimit)
+	}
+	if cfg.APIExpensiveLimit != 5 {
+		t.Fatalf("expected expensive limit 5, got %d", cfg.APIExpensiveLimit)
+	}
+	if cfg.APIPipelineLimit != 3 {
+		t.Fatalf("expected pipeline limit 3, got %d", cfg.APIPipelineLimit)
 	}
 }

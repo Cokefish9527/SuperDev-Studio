@@ -81,6 +81,43 @@ func TestVolcengineAdvisorAdviseSuccessArrayContent(t *testing.T) {
 	}
 }
 
+func TestVolcengineAdvisorAdviseWithAssetsBuildsMultimodalPayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content any    `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if len(payload.Messages) != 2 {
+			t.Fatalf("expected 2 messages, got %d", len(payload.Messages))
+		}
+		content, ok := payload.Messages[1].Content.([]any)
+		if !ok {
+			t.Fatalf("expected multimodal content array, got %#v", payload.Messages[1].Content)
+		}
+		if len(content) != 2 {
+			t.Fatalf("expected text + image content, got %d items", len(content))
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"多模态建议"}}]}`))
+	}))
+	defer server.Close()
+
+	advisor := NewVolcengineAdvisor("test-key", "ep-vision", server.URL)
+	answer, err := advisor.AdviseWithAssets(context.Background(), "请基于视觉参考给出建议", []string{"https://example.com/demo.png"})
+	if err != nil {
+		t.Fatalf("advise with assets failed: %v", err)
+	}
+	if answer != "多模态建议" {
+		t.Fatalf("unexpected answer: %s", answer)
+	}
+}
+
 func TestVolcengineAdvisorAdviseAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)

@@ -2,3 +2,6 @@
 /backend/*.env
 backend/data/superdev_studio.db
 /backend/output
+/.super-dev
+/coverage
+/backend/coverage

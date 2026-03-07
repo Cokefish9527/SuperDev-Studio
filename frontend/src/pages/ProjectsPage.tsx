@@ -278,7 +278,7 @@ export default function ProjectsPage() {
     <Space orientation="vertical" size="large" style={{ width: '100%' }}>
       <Row justify="space-between" align="middle">
         <Typography.Title level={2} style={{ margin: 0, fontFamily: 'var(--heading-font)' }}>
-          项目与任务管理
+          工作区与计划任务
         </Typography.Title>
         <Space>
           <Button
@@ -288,18 +288,18 @@ export default function ProjectsPage() {
             loading={advanceProject.isPending}
             onClick={() => advanceProject.mutate()}
           >
-            执行项目推进
+            一键推进
           </Button>
           <Button onClick={() => setTaskOpen(true)} disabled={!activeProjectId}>
             新建任务
           </Button>
           <Button type="primary" onClick={() => setOpen(true)}>
-            新建项目
+            新建工作区
           </Button>
         </Space>
       </Row>
 
-      <Card title="项目列表">
+      <Card title="工作区列表">
         <Table<Project>
           rowKey="id"
           columns={projectColumns}
@@ -310,7 +310,7 @@ export default function ProjectsPage() {
       </Card>
 
       <Card
-        title="任务看板"
+        title="计划任务看板"
         extra={
           <Button
             type="primary"
@@ -323,7 +323,7 @@ export default function ProjectsPage() {
         }
       >
         {!activeProjectId ? (
-          <Typography.Text type="secondary">请选择一个项目以查看任务。</Typography.Text>
+          <Typography.Text type="secondary">请选择一个工作区以查看任务。</Typography.Text>
         ) : (
           <Table<Task>
             rowKey="id"
@@ -336,9 +336,9 @@ export default function ProjectsPage() {
         )}
       </Card>
 
-      <Card title="甘特图视图">
+      <Card title="计划排期视图">
         {!activeProjectId ? (
-          <Typography.Text type="secondary">请选择一个项目以查看甘特图。</Typography.Text>
+          <Typography.Text type="secondary">请选择一个工作区以查看甘特图。</Typography.Text>
         ) : !ganttData ? (
           <Typography.Text type="secondary">
             当前暂无可绘制的排期数据，请先点击“自动生成排期”。
@@ -440,7 +440,7 @@ export default function ProjectsPage() {
 
       <Modal
         open={open}
-        title="创建项目"
+        title="创建工作区"
         onCancel={() => setOpen(false)}
         onOk={() => form.submit()}
         confirmLoading={createProject.isPending}
@@ -452,7 +452,7 @@ export default function ProjectsPage() {
           initialValues={{ status: 'active' }}
         >
           <Form.Item name="name" label="项目名" rules={[{ required: true }]}>
-            <Input placeholder="AI研发协作平台" />
+            <Input placeholder="SuperDev Studio 工作区" />
           </Form.Item>
           <Form.Item name="repo_path" label="仓库路径">
             <Input placeholder="D:/Work/your-project" />

@@ -18,7 +18,7 @@ export default function DashboardPage() {
   return (
     <Space orientation="vertical" size="large" style={{ width: '100%' }}>
       <Typography.Title level={2} style={{ marginBottom: 0, fontFamily: 'var(--heading-font)' }}>
-        产品运营概览
+        工作台总览
       </Typography.Title>
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} md={8} xl={4}>
@@ -28,12 +28,12 @@ export default function DashboardPage() {
         </Col>
         <Col xs={24} sm={12} md={8} xl={4}>
           <Card>
-            <Statistic title="任务数" value={stats?.tasks ?? 0} />
+            <Statistic title="计划任务" value={stats?.tasks ?? 0} />
           </Card>
         </Col>
         <Col xs={24} sm={12} md={8} xl={4}>
           <Card>
-            <Statistic title="运行次数" value={stats?.runs ?? 0} />
+            <Statistic title="交付运行" value={stats?.runs ?? 0} />
           </Card>
         </Col>
         <Col xs={24} sm={12} md={8} xl={4}>
@@ -48,11 +48,11 @@ export default function DashboardPage() {
         </Col>
       </Row>
 
-      <Card title="最近流水线运行">
+      <Card title="最近交付运行">
         {!activeProjectId ? (
-          <Empty description="请在右上角选择项目" />
+          <Empty description="请在右上角选择工作区" />
         ) : recentRuns.length === 0 ? (
-          <Empty description="当前项目暂无运行记录" />
+          <Empty description="当前工作区暂无运行记录" />
         ) : (
           <Space orientation="vertical" style={{ width: '100%' }} size="middle">
             {recentRuns.map((run) => (

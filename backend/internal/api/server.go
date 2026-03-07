@@ -25,13 +25,23 @@ import (
 )
 
 type Server struct {
-	store      *store.Store
-	pipeline   *pipeline.Manager
-	contextOpt *contextopt.Service
+	store       *store.Store
+	pipeline    *pipeline.Manager
+	contextOpt  *contextopt.Service
+	config      ServerConfig
+	rateLimiter *slidingWindowRateLimiter
 }
 
 func NewServer(s *store.Store, p *pipeline.Manager, c *contextopt.Service) *Server {
-	return &Server{store: s, pipeline: p, contextOpt: c}
+	return NewServerWithConfig(s, p, c, DefaultServerConfig())
+}
+
+func NewServerWithConfig(s *store.Store, p *pipeline.Manager, c *contextopt.Service, cfg ServerConfig) *Server {
+	limiter := (*slidingWindowRateLimiter)(nil)
+	if cfg.RateLimit.Enabled {
+		limiter = newSlidingWindowRateLimiter(cfg.RateLimit.Window)
+	}
+	return &Server{store: s, pipeline: p, contextOpt: c, config: cfg, rateLimiter: limiter}
 }
 
 func (s *Server) Router() http.Handler {
@@ -54,27 +64,34 @@ func (s *Server) Router() http.Handler {
 
 	r.Route("/api/projects", func(r chi.Router) {
 		r.Get("/", s.handleListProjects)
-		r.Post("/", s.handleCreateProject)
+		r.With(s.rateLimit(s.mutationPolicy("projects:create"))).Post("/", s.handleCreateProject)
 		r.Get("/{projectID}", s.handleGetProject)
-		r.Put("/{projectID}", s.handleUpdateProject)
-		r.Delete("/{projectID}", s.handleDeleteProject)
+		r.With(s.rateLimit(s.mutationPolicy("projects:update"))).Put("/{projectID}", s.handleUpdateProject)
+		r.With(s.rateLimit(s.mutationPolicy("projects:delete"))).Delete("/{projectID}", s.handleDeleteProject)
 		r.Get("/{projectID}/tasks", s.handleListTasks)
-		r.Post("/{projectID}/tasks", s.handleCreateTask)
-		r.Post("/{projectID}/tasks/auto-schedule", s.handleAutoScheduleTasks)
-		r.Post("/{projectID}/advance", s.handleAdvanceProject)
+		r.With(s.rateLimit(s.mutationPolicy("tasks:create"))).Post("/{projectID}/tasks", s.handleCreateTask)
+		r.With(s.rateLimit(s.expensivePolicy("tasks:auto-schedule"))).Post("/{projectID}/tasks/auto-schedule", s.handleAutoScheduleTasks)
+		r.With(s.rateLimit(s.expensivePolicy("projects:advance"))).Post("/{projectID}/advance", s.handleAdvanceProject)
+		r.Get("/{projectID}/change-batches", s.handleListChangeBatches)
+		r.With(s.rateLimit(s.mutationPolicy("change-batches:create"))).Post("/{projectID}/change-batches", s.handleCreateChangeBatch)
 		r.Get("/{projectID}/memories", s.handleListMemories)
-		r.Post("/{projectID}/memories", s.handleCreateMemory)
+		r.With(s.rateLimit(s.mutationPolicy("memories:create"))).Post("/{projectID}/memories", s.handleCreateMemory)
 		r.Get("/{projectID}/knowledge/documents", s.handleListKnowledgeDocuments)
-		r.Post("/{projectID}/knowledge/documents", s.handleCreateKnowledgeDocument)
+		r.With(s.rateLimit(s.expensivePolicy("knowledge:create"))).Post("/{projectID}/knowledge/documents", s.handleCreateKnowledgeDocument)
 		r.Get("/{projectID}/knowledge/search", s.handleSearchKnowledge)
-		r.Post("/{projectID}/context-pack", s.handleBuildContextPack)
+		r.With(s.rateLimit(s.expensivePolicy("context-pack:build"))).Post("/{projectID}/context-pack", s.handleBuildContextPack)
 		r.Get("/{projectID}/pipeline-runs", s.handleListPipelineRuns)
 	})
 
-	r.Patch("/api/tasks/{taskID}", s.handleUpdateTask)
-	r.Post("/api/pipeline/runs", s.handleStartPipeline)
-	r.Post("/api/pipeline/runs/{runID}/retry", s.handleRetryPipeline)
+	r.With(s.rateLimit(s.mutationPolicy("tasks:update"))).Patch("/api/tasks/{taskID}", s.handleUpdateTask)
+	r.With(s.rateLimit(s.pipelinePolicy("runs:start"))).Post("/api/pipeline/runs", s.handleStartPipeline)
+	r.With(s.rateLimit(s.pipelinePolicy("runs:retry"))).Post("/api/pipeline/runs/{runID}/retry", s.handleRetryPipeline)
 	r.Get("/api/pipeline/runs/{runID}", s.handleGetPipelineRun)
+	r.Get("/api/pipeline/runs/{runID}/agent", s.handleGetPipelineRunAgent)
+	r.Get("/api/pipeline/runs/{runID}/agent/steps", s.handleListPipelineRunAgentSteps)
+	r.Get("/api/pipeline/runs/{runID}/agent/tool-calls", s.handleListPipelineRunAgentToolCalls)
+	r.Get("/api/pipeline/runs/{runID}/agent/evidence", s.handleListPipelineRunAgentEvidence)
+	r.Get("/api/pipeline/runs/{runID}/agent/evaluations", s.handleListPipelineRunAgentEvaluations)
 	r.Get("/api/pipeline/runs/{runID}/completion", s.handleGetPipelineRunCompletion)
 	r.Get("/api/pipeline/runs/{runID}/preview", s.handlePreviewPipelineRunOutput)
 	r.Get("/api/pipeline/runs/{runID}/preview/*", s.handlePreviewPipelineRunOutput)
@@ -190,10 +207,19 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 type createProjectRequest struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	RepoPath    string `json:"repo_path"`
-	Status      string `json:"status"`
+	Name                      string `json:"name"`
+	Description               string `json:"description"`
+	RepoPath                  string `json:"repo_path"`
+	Status                    string `json:"status"`
+	DefaultPlatform           string `json:"default_platform"`
+	DefaultFrontend           string `json:"default_frontend"`
+	DefaultBackend            string `json:"default_backend"`
+	DefaultDomain             string `json:"default_domain"`
+	DefaultContextMode        string `json:"default_context_mode"`
+	DefaultContextTokenBudget int    `json:"default_context_token_budget"`
+	DefaultContextMaxItems    int    `json:"default_context_max_items"`
+	DefaultContextDynamic     *bool  `json:"default_context_dynamic"`
+	DefaultMemoryWriteback    *bool  `json:"default_memory_writeback"`
 }
 
 func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
@@ -207,10 +233,19 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	project, err := s.store.CreateProject(r.Context(), store.Project{
-		Name:        strings.TrimSpace(req.Name),
-		Description: strings.TrimSpace(req.Description),
-		RepoPath:    strings.TrimSpace(req.RepoPath),
-		Status:      strings.TrimSpace(req.Status),
+		Name:                      strings.TrimSpace(req.Name),
+		Description:               strings.TrimSpace(req.Description),
+		RepoPath:                  strings.TrimSpace(req.RepoPath),
+		Status:                    strings.TrimSpace(req.Status),
+		DefaultPlatform:           strings.TrimSpace(req.DefaultPlatform),
+		DefaultFrontend:           strings.TrimSpace(req.DefaultFrontend),
+		DefaultBackend:            strings.TrimSpace(req.DefaultBackend),
+		DefaultDomain:             strings.TrimSpace(req.DefaultDomain),
+		DefaultContextMode:        strings.TrimSpace(req.DefaultContextMode),
+		DefaultContextTokenBudget: req.DefaultContextTokenBudget,
+		DefaultContextMaxItems:    req.DefaultContextMaxItems,
+		DefaultContextDynamic:     valueOrDefault(req.DefaultContextDynamic, true),
+		DefaultMemoryWriteback:    valueOrDefault(req.DefaultMemoryWriteback, true),
 	})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
@@ -240,13 +275,33 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err)
 		return
 	}
-	project, err := s.store.UpdateProject(
+	existing, err := s.store.GetProject(r.Context(), projectID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			respondError(w, http.StatusNotFound, err)
+			return
+		}
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	project, err := s.store.UpdateProjectWithDefaults(
 		r.Context(),
 		projectID,
-		strings.TrimSpace(req.Name),
-		strings.TrimSpace(req.Description),
-		strings.TrimSpace(req.RepoPath),
-		strings.TrimSpace(req.Status),
+		store.Project{
+			Name:                      strings.TrimSpace(req.Name),
+			Description:               strings.TrimSpace(req.Description),
+			RepoPath:                  strings.TrimSpace(req.RepoPath),
+			Status:                    strings.TrimSpace(req.Status),
+			DefaultPlatform:           strings.TrimSpace(req.DefaultPlatform),
+			DefaultFrontend:           strings.TrimSpace(req.DefaultFrontend),
+			DefaultBackend:            strings.TrimSpace(req.DefaultBackend),
+			DefaultDomain:             strings.TrimSpace(req.DefaultDomain),
+			DefaultContextMode:        strings.TrimSpace(req.DefaultContextMode),
+			DefaultContextTokenBudget: req.DefaultContextTokenBudget,
+			DefaultContextMaxItems:    req.DefaultContextMaxItems,
+			DefaultContextDynamic:     valueOrDefault(req.DefaultContextDynamic, existing.DefaultContextDynamic),
+			DefaultMemoryWriteback:    valueOrDefault(req.DefaultMemoryWriteback, existing.DefaultMemoryWriteback),
+		},
 	)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -270,6 +325,47 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+type createChangeBatchRequest struct {
+	Title string `json:"title"`
+	Goal  string `json:"goal"`
+	Mode  string `json:"mode"`
+}
+
+func (s *Server) handleListChangeBatches(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	items, err := s.store.ListChangeBatches(r.Context(), projectID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) handleCreateChangeBatch(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	var req createChangeBatchRequest
+	if err := decodeJSON(r, &req); err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(req.Title) == "" {
+		respondError(w, http.StatusBadRequest, errors.New("title is required"))
+		return
+	}
+	batch, err := s.store.CreateChangeBatch(r.Context(), store.ChangeBatch{
+		ProjectID: projectID,
+		Title:     strings.TrimSpace(req.Title),
+		Goal:      strings.TrimSpace(req.Goal),
+		Mode:      strings.TrimSpace(req.Mode),
+		Status:    "draft",
+	})
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	respondJSON(w, http.StatusCreated, batch)
 }
 
 type createTaskRequest struct {
@@ -392,10 +488,11 @@ type advanceProjectRequest struct {
 }
 
 type advanceProjectResponse struct {
-	Run           store.PipelineRun `json:"run"`
-	Mode          string            `json:"mode"`
-	MemoryWritten bool              `json:"memory_written"`
-	MemoryID      string            `json:"memory_id,omitempty"`
+	Run           store.PipelineRun  `json:"run"`
+	Mode          string             `json:"mode"`
+	MemoryWritten bool               `json:"memory_written"`
+	MemoryID      string             `json:"memory_id,omitempty"`
+	ChangeBatch   *store.ChangeBatch `json:"change_batch,omitempty"`
 }
 
 func (s *Server) handleAdvanceProject(w http.ResponseWriter, r *http.Request) {
@@ -439,32 +536,44 @@ func (s *Server) handleAdvanceProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	prompt := buildProjectAdvancePrompt(project, tasks, req.Goal)
+	changeBatch, err := s.store.CreateChangeBatch(r.Context(), store.ChangeBatch{
+		ProjectID: projectID,
+		Title:     buildChangeBatchTitle(project.Name, req.Goal, mode),
+		Goal:      strings.TrimSpace(req.Goal),
+		Mode:      mode,
+		Status:    "queued",
+	})
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
 
 	platform := strings.TrimSpace(req.Platform)
 	if platform == "" {
-		platform = "web"
+		platform = strings.TrimSpace(project.DefaultPlatform)
 	}
 	frontend := strings.TrimSpace(req.Frontend)
 	if frontend == "" {
-		frontend = "react"
+		frontend = strings.TrimSpace(project.DefaultFrontend)
 	}
 	backend := strings.TrimSpace(req.Backend)
 	if backend == "" {
-		backend = "go"
+		backend = strings.TrimSpace(project.DefaultBackend)
 	}
 
 	projectDir := s.resolveProjectDirForAdvance(r.Context(), projectID, project.RepoPath)
 	startReq := pipeline.StartRequest{
-		ProjectID: projectID,
-		Prompt:    prompt,
-		Simulate:  false,
+		ProjectID:     projectID,
+		ChangeBatchID: changeBatch.ID,
+		Prompt:        prompt,
+		Simulate:      false,
 		Context: pipeline.ContextOptions{
-			Mode:            pipeline.ContextModeAuto,
+			Mode:            pipeline.ContextMode(project.DefaultContextMode),
 			Query:           strings.TrimSpace(req.Goal),
-			TokenBudget:     1400,
-			MaxItems:        12,
-			DynamicByPhase:  true,
-			MemoryWriteback: true,
+			TokenBudget:     project.DefaultContextTokenBudget,
+			MaxItems:        project.DefaultContextMaxItems,
+			DynamicByPhase:  project.DefaultContextDynamic,
+			MemoryWriteback: project.DefaultMemoryWriteback,
 		},
 		Lifecycle: pipeline.LifecycleOptions{
 			OneClickDelivery: mode == advanceModeFullCycle,
@@ -477,7 +586,7 @@ func (s *Server) handleAdvanceProject(w http.ResponseWriter, r *http.Request) {
 			Platform:   platform,
 			Frontend:   frontend,
 			Backend:    backend,
-			Domain:     strings.TrimSpace(req.Domain),
+			Domain:     firstNonEmpty(strings.TrimSpace(req.Domain), strings.TrimSpace(project.DefaultDomain)),
 		},
 	}
 
@@ -498,6 +607,7 @@ func (s *Server) handleAdvanceProject(w http.ResponseWriter, r *http.Request) {
 		Mode:          mode,
 		MemoryWritten: memoryWritten,
 		MemoryID:      mem.ID,
+		ChangeBatch:   &changeBatch,
 	})
 }
 
@@ -657,23 +767,26 @@ func (s *Server) handleBuildContextPack(w http.ResponseWriter, r *http.Request) 
 }
 
 type startPipelineRequest struct {
-	ProjectID          string `json:"project_id"`
-	Prompt             string `json:"prompt"`
-	Simulate           bool   `json:"simulate"`
-	FullCycle          bool   `json:"full_cycle"`
-	StepByStep         bool   `json:"step_by_step"`
-	IterationLimit     int    `json:"iteration_limit"`
-	ProjectDir         string `json:"project_dir"`
-	Platform           string `json:"platform"`
-	Frontend           string `json:"frontend"`
-	Backend            string `json:"backend"`
-	Domain             string `json:"domain"`
-	ContextMode        string `json:"context_mode"`
-	ContextQuery       string `json:"context_query"`
-	ContextTokenBudget int    `json:"context_token_budget"`
-	ContextMaxItems    int    `json:"context_max_items"`
-	ContextDynamic     bool   `json:"context_dynamic"`
-	MemoryWriteback    *bool  `json:"memory_writeback"`
+	ProjectID          string   `json:"project_id"`
+	ChangeBatchID      string   `json:"change_batch_id"`
+	Prompt             string   `json:"prompt"`
+	LLMEnhancedLoop    bool     `json:"llm_enhanced_loop"`
+	MultimodalAssets   []string `json:"multimodal_assets"`
+	Simulate           bool     `json:"simulate"`
+	FullCycle          bool     `json:"full_cycle"`
+	StepByStep         bool     `json:"step_by_step"`
+	IterationLimit     int      `json:"iteration_limit"`
+	ProjectDir         string   `json:"project_dir"`
+	Platform           string   `json:"platform"`
+	Frontend           string   `json:"frontend"`
+	Backend            string   `json:"backend"`
+	Domain             string   `json:"domain"`
+	ContextMode        string   `json:"context_mode"`
+	ContextQuery       string   `json:"context_query"`
+	ContextTokenBudget int      `json:"context_token_budget"`
+	ContextMaxItems    int      `json:"context_max_items"`
+	ContextDynamic     *bool    `json:"context_dynamic"`
+	MemoryWriteback    *bool    `json:"memory_writeback"`
 }
 
 func (s *Server) handleStartPipeline(w http.ResponseWriter, r *http.Request) {
@@ -686,7 +799,8 @@ func (s *Server) handleStartPipeline(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, errors.New("project_id and prompt are required"))
 		return
 	}
-	if _, err := s.store.GetProject(r.Context(), req.ProjectID); err != nil {
+	project, err := s.store.GetProject(r.Context(), req.ProjectID)
+	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			respondError(w, http.StatusNotFound, err)
 			return
@@ -694,8 +808,27 @@ func (s *Server) handleStartPipeline(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
+	if strings.TrimSpace(req.ChangeBatchID) != "" {
+		batch, batchErr := s.store.GetChangeBatch(r.Context(), strings.TrimSpace(req.ChangeBatchID))
+		if batchErr != nil {
+			if errors.Is(batchErr, store.ErrNotFound) {
+				respondError(w, http.StatusNotFound, batchErr)
+				return
+			}
+			respondError(w, http.StatusInternalServerError, batchErr)
+			return
+		}
+		if batch.ProjectID != req.ProjectID {
+			respondError(w, http.StatusBadRequest, errors.New("change_batch_id does not belong to project"))
+			return
+		}
+	}
 
-	contextMode, modeErr := parseContextMode(req.ContextMode)
+	rawContextMode := req.ContextMode
+	if strings.TrimSpace(rawContextMode) == "" {
+		rawContextMode = project.DefaultContextMode
+	}
+	contextMode, modeErr := parseContextMode(rawContextMode)
 	if modeErr != nil {
 		respondError(w, http.StatusBadRequest, modeErr)
 		return
@@ -716,16 +849,21 @@ func (s *Server) handleStartPipeline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	startReq := pipeline.StartRequest{
-		ProjectID: req.ProjectID,
-		Prompt:    req.Prompt,
-		Simulate:  req.Simulate,
+		ProjectID:     req.ProjectID,
+		ChangeBatchID: strings.TrimSpace(req.ChangeBatchID),
+		Prompt:        req.Prompt,
+		Simulate:      req.Simulate,
+		LLM: pipeline.LLMOptions{
+			EnhancedLoop:     req.LLMEnhancedLoop,
+			MultimodalAssets: compactStrings(req.MultimodalAssets),
+		},
 		Context: pipeline.ContextOptions{
 			Mode:            contextMode,
 			Query:           strings.TrimSpace(req.ContextQuery),
-			TokenBudget:     req.ContextTokenBudget,
-			MaxItems:        req.ContextMaxItems,
-			DynamicByPhase:  req.ContextDynamic,
-			MemoryWriteback: valueOrDefault(req.MemoryWriteback, true),
+			TokenBudget:     intOrDefault(req.ContextTokenBudget, project.DefaultContextTokenBudget),
+			MaxItems:        intOrDefault(req.ContextMaxItems, project.DefaultContextMaxItems),
+			DynamicByPhase:  boolOrDefault(req.ContextDynamic, project.DefaultContextDynamic),
+			MemoryWriteback: valueOrDefault(req.MemoryWriteback, project.DefaultMemoryWriteback),
 		},
 		Lifecycle: pipeline.LifecycleOptions{
 			OneClickDelivery: req.FullCycle,
@@ -735,10 +873,10 @@ func (s *Server) handleStartPipeline(w http.ResponseWriter, r *http.Request) {
 		Options: pipeline.RunRequest{
 			Prompt:     req.Prompt,
 			ProjectDir: strings.TrimSpace(req.ProjectDir),
-			Platform:   strings.TrimSpace(req.Platform),
-			Frontend:   strings.TrimSpace(req.Frontend),
-			Backend:    strings.TrimSpace(req.Backend),
-			Domain:     strings.TrimSpace(req.Domain),
+			Platform:   firstNonEmpty(strings.TrimSpace(req.Platform), strings.TrimSpace(project.DefaultPlatform)),
+			Frontend:   firstNonEmpty(strings.TrimSpace(req.Frontend), strings.TrimSpace(project.DefaultFrontend)),
+			Backend:    firstNonEmpty(strings.TrimSpace(req.Backend), strings.TrimSpace(project.DefaultBackend)),
+			Domain:     firstNonEmpty(strings.TrimSpace(req.Domain), strings.TrimSpace(project.DefaultDomain)),
 		},
 	}
 
@@ -777,10 +915,15 @@ func (s *Server) handleRetryPipeline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	startReq := pipeline.StartRequest{
-		ProjectID: previousRun.ProjectID,
-		Prompt:    previousRun.Prompt,
-		Simulate:  previousRun.Simulate,
-		RetryOf:   previousRun.ID,
+		ProjectID:     previousRun.ProjectID,
+		ChangeBatchID: previousRun.ChangeBatchID,
+		Prompt:        previousRun.Prompt,
+		Simulate:      previousRun.Simulate,
+		RetryOf:       previousRun.ID,
+		LLM: pipeline.LLMOptions{
+			EnhancedLoop:     previousRun.LLMEnhancedLoop,
+			MultimodalAssets: compactStrings(previousRun.MultimodalAssets),
+		},
 		Context: pipeline.ContextOptions{
 			Mode:            contextMode,
 			Query:           strings.TrimSpace(previousRun.ContextQuery),
@@ -832,6 +975,47 @@ func valueOrDefault(value *bool, defaultValue bool) bool {
 	return *value
 }
 
+func boolOrDefault(value *bool, defaultValue bool) bool {
+	if value == nil {
+		return defaultValue
+	}
+	return *value
+}
+
+func intOrDefault(value int, defaultValue int) int {
+	if value <= 0 {
+		return defaultValue
+	}
+	return value
+}
+
+func compactStrings(items []string) []string {
+	result := make([]string, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, raw := range items {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 func parseAdvanceMode(raw string) (string, error) {
 	mode := strings.ToLower(strings.TrimSpace(raw))
 	if mode == "" {
@@ -843,6 +1027,20 @@ func parseAdvanceMode(raw string) (string, error) {
 	default:
 		return "", errors.New("mode must be one of: step_by_step, full_cycle")
 	}
+}
+
+func buildChangeBatchTitle(projectName, goal, mode string) string {
+	base := strings.TrimSpace(goal)
+	if base == "" {
+		base = strings.TrimSpace(projectName)
+	}
+	if base == "" {
+		base = "项目推进批次"
+	}
+	if mode == advanceModeFullCycle {
+		return base + " / 全流程交付"
+	}
+	return base + " / 逐步推进"
 }
 
 func (s *Server) ensureSuperDevUsageMemory(ctx context.Context, projectID string) (store.Memory, bool, error) {
@@ -1046,11 +1244,21 @@ type pipelineCompletionItem struct {
 }
 
 type pipelineArtifact struct {
-	Name      string `json:"name"`
-	Path      string `json:"path"`
-	Kind      string `json:"kind"`
-	SizeBytes int64  `json:"size_bytes"`
-	UpdatedAt string `json:"updated_at"`
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	Kind        string `json:"kind"`
+	SizeBytes   int64  `json:"size_bytes"`
+	UpdatedAt   string `json:"updated_at"`
+	PreviewURL  string `json:"preview_url,omitempty"`
+	PreviewType string `json:"preview_type,omitempty"`
+	Stage       string `json:"stage,omitempty"`
+}
+
+type pipelineStage struct {
+	Key       string             `json:"key"`
+	Title     string             `json:"title"`
+	Status    string             `json:"status"`
+	Artifacts []pipelineArtifact `json:"artifacts"`
 }
 
 type pipelineCompletionResponse struct {
@@ -1059,6 +1267,7 @@ type pipelineCompletionResponse struct {
 	OutputDir  string                   `json:"output_dir"`
 	Checklist  []pipelineCompletionItem `json:"checklist"`
 	Artifacts  []pipelineArtifact       `json:"artifacts"`
+	Stages     []pipelineStage          `json:"stages"`
 	PreviewURL string                   `json:"preview_url,omitempty"`
 }
 
@@ -1136,25 +1345,21 @@ func (s *Server) handlePreviewPipelineRunOutput(w http.ResponseWriter, r *http.R
 
 func buildPipelineCompletionResponse(run store.PipelineRun) pipelineCompletionResponse {
 	outputDir := filepath.Join(resolveRunBaseDir(run), "output")
-	changeID := changeIDFromPrompt(run.Prompt)
-
-	docItems := []struct {
-		key      string
-		title    string
-		fileName string
-		kind     string
-	}{
-		{key: "research", title: "需求增强报告", fileName: changeID + "-research.md", kind: "markdown"},
-		{key: "prd", title: "PRD 文档", fileName: changeID + "-prd.md", kind: "markdown"},
-		{key: "architecture", title: "架构文档", fileName: changeID + "-architecture.md", kind: "markdown"},
-		{key: "uiux", title: "UI/UX 文档", fileName: changeID + "-uiux.md", kind: "markdown"},
-		{key: "execution-plan", title: "执行计划", fileName: changeID + "-execution-plan.md", kind: "markdown"},
-		{key: "frontend-blueprint", title: "前端蓝图", fileName: changeID + "-frontend-blueprint.md", kind: "markdown"},
-		{key: "task-execution", title: "任务执行报告", fileName: changeID + "-task-execution.md", kind: "markdown"},
-		{key: "redteam", title: "红队报告", fileName: changeID + "-redteam.md", kind: "markdown"},
-		{key: "quality-gate", title: "质量门禁报告", fileName: changeID + "-quality-gate.md", kind: "markdown"},
+	scanned := collectPipelineOutputFiles(run)
+	artifacts := make([]pipelineArtifact, 0, len(scanned))
+	for _, item := range scanned {
+		artifacts = append(artifacts, buildScannedArtifact(run, item))
 	}
-
+	sort.SliceStable(artifacts, func(i, j int) bool {
+		leftOrder := pipelineStageOrder(artifacts[i].Stage)
+		rightOrder := pipelineStageOrder(artifacts[j].Stage)
+		if leftOrder == rightOrder {
+			return artifacts[i].Path < artifacts[j].Path
+		}
+		return leftOrder < rightOrder
+	})
+	stages := buildPipelineStages(run, artifacts)
+	previewURL := choosePrimaryPreviewURL(artifacts)
 	checklist := []pipelineCompletionItem{
 		{
 			Key:    "run-status",
@@ -1163,100 +1368,37 @@ func buildPipelineCompletionResponse(run store.PipelineRun) pipelineCompletionRe
 			Note:   run.Status,
 		},
 	}
-
-	artifacts := []pipelineArtifact{}
-	for _, item := range docItems {
-		fullPath := filepath.Join(outputDir, item.fileName)
-		if info, err := os.Stat(fullPath); err == nil && !info.IsDir() {
-			checklist = append(checklist, pipelineCompletionItem{
-				Key:    item.key,
-				Title:  item.title,
-				Status: "completed",
-			})
-			artifacts = append(artifacts, buildArtifact(item.title, item.kind, fullPath, resolveRunBaseDir(run)))
-			continue
-		}
+	for _, stage := range stages {
 		checklist = append(checklist, pipelineCompletionItem{
-			Key:    item.key,
-			Title:  item.title,
-			Status: "missing",
+			Key:    "stage-" + stage.Key,
+			Title:  stage.Title + "阶段产物",
+			Status: stage.Status,
+			Note: func() string {
+				if len(stage.Artifacts) == 0 {
+					return "暂无可预览产物"
+				}
+				return fmt.Sprintf("已发现 %d 个产物", len(stage.Artifacts))
+			}(),
 		})
 	}
-
-	frontendDir := filepath.Join(outputDir, "frontend")
-	frontendFiles := []struct {
-		key      string
-		title    string
-		fileName string
-	}{
-		{key: "frontend-index", title: "前端预览页面 index.html", fileName: "index.html"},
-		{key: "frontend-style", title: "前端样式 styles.css", fileName: "styles.css"},
-		{key: "frontend-script", title: "前端脚本 app.js", fileName: "app.js"},
-	}
-
-	previewURL := ""
-	for _, item := range frontendFiles {
-		fullPath := filepath.Join(frontendDir, item.fileName)
-		if info, err := os.Stat(fullPath); err == nil && !info.IsDir() {
-			checklist = append(checklist, pipelineCompletionItem{
-				Key:    item.key,
-				Title:  item.title,
-				Status: "completed",
-			})
-			artifacts = append(artifacts, buildArtifact(item.title, "frontend", fullPath, resolveRunBaseDir(run)))
-			continue
-		}
-		checklist = append(checklist, pipelineCompletionItem{
-			Key:    item.key,
-			Title:  item.title,
-			Status: "missing",
-		})
-	}
-
-	previewHTMLPath := filepath.Join(outputDir, "preview.html")
-	if info, err := os.Stat(previewHTMLPath); err == nil && !info.IsDir() {
-		checklist = append(checklist, pipelineCompletionItem{
-			Key:    "preview-html",
-			Title:  "统一预览页面 preview.html",
-			Status: "completed",
-		})
-		artifacts = append(artifacts, buildArtifact("统一预览页面 preview.html", "preview", previewHTMLPath, resolveRunBaseDir(run)))
-	} else {
-		checklist = append(checklist, pipelineCompletionItem{
-			Key:    "preview-html",
-			Title:  "统一预览页面 preview.html",
-			Status: "missing",
-		})
-	}
-
-	if fileExists(filepath.Join(frontendDir, "index.html")) {
-		previewURL = fmt.Sprintf("/api/pipeline/runs/%s/preview/frontend/index.html", run.ID)
-	} else if fileExists(previewHTMLPath) {
-		previewURL = fmt.Sprintf("/api/pipeline/runs/%s/preview/preview.html", run.ID)
-	}
-
 	checklist = append(checklist, pipelineCompletionItem{
 		Key:    "frontend-preview",
 		Title:  "前端页面预览",
 		Status: statusFromBool(previewURL != ""),
 		Note: func() string {
 			if previewURL == "" {
-				return "未检测到可预览页面"
+				return "未检测到 HTML 预览页面"
 			}
 			return "可在线预览"
 		}(),
 	})
-
-	sort.SliceStable(artifacts, func(i, j int) bool {
-		return artifacts[i].Path < artifacts[j].Path
-	})
-
 	return pipelineCompletionResponse{
 		RunID:      run.ID,
 		Status:     run.Status,
 		OutputDir:  outputDir,
 		Checklist:  checklist,
 		Artifacts:  artifacts,
+		Stages:     stages,
 		PreviewURL: previewURL,
 	}
 }

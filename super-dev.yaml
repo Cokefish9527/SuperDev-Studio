@@ -1,0 +1,9 @@
+name: superdev-studio
+backend: go
+description: Refactor SuperDev Studio into a change-driven delivery workspace. Unify
+  the product IA around workspace, change center, delivery runs, context hub, and
+  project settings. Persist project default execution profile. Add change batch and
+  run traceability metadata. Upgrade the React plus Go app pages and APIs accordingly.
+domain: ''
+frontend: react
+platform: web

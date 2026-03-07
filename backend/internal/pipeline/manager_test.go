@@ -23,6 +23,37 @@ type fakeRunner struct {
 	commandFn      func(req RunRequest, commandArgs []string) ([]string, error)
 }
 
+type fakeAdvisor struct {
+	mu        sync.Mutex
+	calls     int
+	assetsLog [][]string
+}
+
+func (f *fakeAdvisor) Advise(_ context.Context, prompt string) (string, error) {
+	f.mu.Lock()
+	f.calls++
+	f.mu.Unlock()
+	return "LLM advisory for: " + truncateForPrompt(prompt, 80), nil
+}
+
+func (f *fakeAdvisor) AdviseWithAssets(_ context.Context, prompt string, assetURLs []string) (string, error) {
+	f.mu.Lock()
+	f.calls++
+	f.assetsLog = append(f.assetsLog, append([]string{}, assetURLs...))
+	f.mu.Unlock()
+	return "LLM multimodal advisory for: " + truncateForPrompt(prompt, 80), nil
+}
+
+func (f *fakeAdvisor) AssetCalls() [][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	copied := make([][]string, 0, len(f.assetsLog))
+	for _, item := range f.assetsLog {
+		copied = append(copied, append([]string{}, item...))
+	}
+	return copied
+}
+
 func (f *fakeRunner) RunPipeline(_ context.Context, req RunRequest) ([]string, error) {
 	f.mu.Lock()
 	f.capturedPrompt = req.Prompt
@@ -852,6 +883,203 @@ func TestManagerStepByStepLifecycleBuildsNextIterationTasks(t *testing.T) {
 	}
 	if nextIterationTaskCount == 0 {
 		t.Fatalf("expected generated tasks with 下一迭代 prefix")
+	}
+}
+
+func TestManagerEnhancedLoopGeneratesStageArtifacts(t *testing.T) {
+	s := newPipelineTestStore(t)
+	ctx := context.Background()
+	project, err := s.CreateProject(ctx, store.Project{Name: "LoopArtifacts"})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	projectDir := t.TempDir()
+	changeID := "loop-artifacts-change"
+
+	runner := &fakeRunner{
+		commandFn: func(req RunRequest, commandArgs []string) ([]string, error) {
+			if len(commandArgs) == 0 {
+				return nil, errors.New("empty command args")
+			}
+			outputDir := filepath.Join(req.ProjectDir, "output")
+			if mkErr := os.MkdirAll(outputDir, 0o755); mkErr != nil {
+				return nil, mkErr
+			}
+			switch commandArgs[0] {
+			case "create":
+				prdPath := filepath.Join(outputDir, changeID+"-prd.md")
+				if writeErr := os.WriteFile(prdPath, []byte("# PRD\n\nloop delivery scenario"), 0o644); writeErr != nil {
+					return nil, writeErr
+				}
+				return []string{"project created", "change id: " + changeID}, nil
+			case "spec":
+				return []string{"spec validate passed"}, nil
+			case "task":
+				return []string{"task run passed"}, nil
+			case "quality":
+				return []string{"quality passed"}, nil
+			case "preview":
+				if writeErr := os.WriteFile(filepath.Join(outputDir, "preview.html"), []byte("<html>preview</html>"), 0o644); writeErr != nil {
+					return nil, writeErr
+				}
+				return []string{"preview ok"}, nil
+			case "deploy":
+				return []string{"deploy ok"}, nil
+			default:
+				return []string{"ok"}, nil
+			}
+		},
+	}
+	advisor := &fakeAdvisor{}
+	manager := NewManager(s, runner, contextopt.NewService(s))
+	manager.SetLLMAdvisor(advisor)
+
+	run, err := manager.Start(ctx, StartRequest{
+		ProjectID: project.ID,
+		Prompt:    "execute enhanced multimodal delivery loop",
+		Simulate:  false,
+		LLM: LLMOptions{
+			EnhancedLoop:     true,
+			MultimodalAssets: []string{"https://example.com/reference.png"},
+		},
+		Context: ContextOptions{MemoryWriteback: true},
+		Lifecycle: LifecycleOptions{
+			StepByStep:     true,
+			IterationLimit: 2,
+		},
+		Options: RunRequest{
+			Prompt:     "execute enhanced multimodal delivery loop",
+			ProjectDir: projectDir,
+			Platform:   "web",
+			Frontend:   "react",
+			Backend:    "go",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	finished := waitForRunCompletion(t, s, run.ID)
+	if finished.Status != "completed" {
+		t.Fatalf("expected completed, got %s", finished.Status)
+	}
+
+	conceptMatches, err := filepath.Glob(filepath.Join(projectDir, "output", "*-concept.md"))
+	if err != nil || len(conceptMatches) == 0 {
+		t.Fatalf("expected concept artifact, got err=%v count=%d", err, len(conceptMatches))
+	}
+	designMatches, err := filepath.Glob(filepath.Join(projectDir, "output", "*-design-loop.md"))
+	if err != nil || len(designMatches) == 0 {
+		t.Fatalf("expected design artifact, got err=%v count=%d", err, len(designMatches))
+	}
+	reflectionMatches, err := filepath.Glob(filepath.Join(projectDir, "output", "*-reflection.md"))
+	if err != nil || len(reflectionMatches) == 0 {
+		t.Fatalf("expected reflection artifact, got err=%v count=%d", err, len(reflectionMatches))
+	}
+
+	assertMarkdownContainsAll(t, conceptMatches[0],
+		"# \u6784\u601d\u589e\u5f3a\u7a3f",
+		"## \u6587\u6863\u5143\u6570\u636e",
+		"| change_id | execute-enhanced-multimodal-delivery-loop |",
+		"## \u8f93\u5165\u5feb\u7167",
+		"## \u6267\u884c\u6458\u8981",
+		"## \u7528\u6237\u4ef7\u503c",
+		"## \u6838\u5fc3\u573a\u666f",
+		"## \u4fe1\u606f\u67b6\u6784\u8349\u6848",
+		"## \u5173\u952e\u9875\u9762\u4e0e\u6d41\u7a0b",
+		"## \u98ce\u9669\u4e0e\u4f9d\u8d56",
+		"## \u9a8c\u6536\u68c0\u67e5\u70b9",
+		"## \u4e0b\u4e00\u6b65\u52a8\u4f5c",
+		"## LLM \u539f\u59cb\u8f93\u51fa",
+	)
+	assertMarkdownContainsAll(t, designMatches[0],
+		"# \u8bbe\u8ba1\u590d\u6838\u7a3f",
+		"## \u6587\u6863\u5143\u6570\u636e",
+		"| change_id | loop-artifacts-change |",
+		"## \u8f93\u5165\u5feb\u7167",
+		"## \u6267\u884c\u6458\u8981",
+		"## \u8bbe\u8ba1\u7ed3\u8bba",
+		"## \u4fe1\u606f\u67b6\u6784\u8c03\u6574",
+		"## \u6570\u636e\u6a21\u578b\u8c03\u6574",
+		"## \u9875\u9762\u6539\u7248\u8349\u56fe",
+		"## super-dev \u6267\u884c\u52a8\u4f5c",
+		"## \u98ce\u9669\u4e0e\u4f9d\u8d56",
+		"## \u9a8c\u6536\u68c0\u67e5\u70b9",
+		"## \u4e0b\u4e00\u6b65\u52a8\u4f5c",
+		"## LLM \u539f\u59cb\u8f93\u51fa",
+	)
+	assertMarkdownContainsAll(t, reflectionMatches[0],
+		"# \u590d\u76d8\u518d\u6784\u601d\u7a3f",
+		"## \u6587\u6863\u5143\u6570\u636e",
+		"| change_id | loop-artifacts-change |",
+		"## \u8f93\u5165\u5feb\u7167",
+		"## \u6267\u884c\u6458\u8981",
+		"## \u672c\u8f6e\u4ea7\u51fa",
+		"## \u8d28\u91cf\u590d\u76d8",
+		"## \u7f3a\u53e3\u4e0e\u503a\u52a1",
+		"## \u4e0b\u4e00\u8f6e\u6784\u601d",
+		"## \u590d\u76d8\u5907\u6ce8",
+		"## \u98ce\u9669\u4e0e\u4f9d\u8d56",
+		"## \u9a8c\u6536\u68c0\u67e5\u70b9",
+		"## \u4e0b\u4e00\u6b65\u52a8\u4f5c",
+		"## LLM \u539f\u59cb\u8f93\u51fa",
+	)
+
+	assetCalls := advisor.AssetCalls()
+	if len(assetCalls) == 0 || len(assetCalls[0]) == 0 {
+		t.Fatalf("expected multimodal advisor calls")
+	}
+}
+
+func TestBuildLoopArtifactMarkdownUsesStructuredTemplate(t *testing.T) {
+	markdown := buildLoopArtifactMarkdown("run-123", loopArtifactTemplate{
+		stage:    "llm-design",
+		title:    "\u8bbe\u8ba1\u590d\u6838\u7a3f",
+		suffix:   "design-loop",
+		kind:     loopTemplateDesign,
+		changeID: "change-xyz",
+		assets:   []string{"https://example.com/a.png"},
+		sections: []string{"## \u8f93\u5165\u9700\u6c42\n\u7528\u6237\u8981\u4e00\u4e2a\u66f4\u4e25\u683c\u7684\u6a21\u677f\u5316\u4ea4\u4ed8"},
+	}, `{"summary":"\u7ed3\u6784\u5316\u603b\u7ed3","design_conclusions":["\u7edf\u4e00\u9636\u6bb5\u6a21\u677f"],"information_architecture_adjustments":["\u65b0\u589e\u6587\u6863\u5143\u6570\u636e\u533a"],"data_model_changes":["\u589e\u52a0 acceptance_checkpoints \u5b57\u6bb5"],"page_redesign_plan":["\u9884\u89c8\u9875\u56fa\u5b9a\u7ae0\u8282\u5e03\u5c40"],"superdev_actions":["\u6309\u9636\u6bb5\u4ea7\u51fa\u5e76\u9884\u89c8"],"risks":["\u65e7\u6587\u6863\u517c\u5bb9\u6027"],"acceptance_checkpoints":["\u6bcf\u4efd\u6587\u6863\u90fd\u542b\u56fa\u5b9a\u7ae0\u8282"],"open_questions":["\u662f\u5426\u9700\u8981\u5bfc\u51fa PDF"],"next_actions":["\u8865\u9f50\u524d\u7aef\u9884\u89c8\u9002\u914d"]}`)
+
+	for _, expected := range []string{
+		"# \u8bbe\u8ba1\u590d\u6838\u7a3f",
+		"## \u6587\u6863\u5143\u6570\u636e",
+		"| run_id | run-123 |",
+		"| change_id | change-xyz |",
+		"## \u8f93\u5165\u5feb\u7167",
+		"### \u53c2\u8003\u7d20\u6750",
+		"## \u6267\u884c\u6458\u8981",
+		"\u7ed3\u6784\u5316\u603b\u7ed3",
+		"## \u8bbe\u8ba1\u7ed3\u8bba",
+		"- \u7edf\u4e00\u9636\u6bb5\u6a21\u677f",
+		"## \u4fe1\u606f\u67b6\u6784\u8c03\u6574",
+		"## \u6570\u636e\u6a21\u578b\u8c03\u6574",
+		"## \u9875\u9762\u6539\u7248\u8349\u56fe",
+		"## super-dev \u6267\u884c\u52a8\u4f5c",
+		"## \u98ce\u9669\u4e0e\u4f9d\u8d56",
+		"## \u9a8c\u6536\u68c0\u67e5\u70b9",
+		"## \u4e0b\u4e00\u6b65\u52a8\u4f5c",
+		"## \u5f85\u786e\u8ba4\u95ee\u9898",
+		"## LLM \u539f\u59cb\u8f93\u51fa",
+	} {
+		if !strings.Contains(markdown, expected) {
+			t.Fatalf("expected markdown to contain %q\n%s", expected, markdown)
+		}
+	}
+}
+
+func assertMarkdownContainsAll(t *testing.T, path string, expected ...string) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read markdown %s: %v", path, err)
+	}
+	content := string(raw)
+	for _, item := range expected {
+		if !strings.Contains(content, item) {
+			t.Fatalf("expected %s to contain %q\n%s", path, item, content)
+		}
 	}
 }
 

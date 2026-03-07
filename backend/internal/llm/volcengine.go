@@ -38,6 +38,10 @@ func (v *VolcengineAdvisor) Enabled() bool {
 }
 
 func (v *VolcengineAdvisor) Advise(ctx context.Context, prompt string) (string, error) {
+	return v.AdviseWithAssets(ctx, prompt, nil)
+}
+
+func (v *VolcengineAdvisor) AdviseWithAssets(ctx context.Context, prompt string, assetURLs []string) (string, error) {
 	if !v.Enabled() {
 		return "", errors.New("volcengine advisor is not configured")
 	}
@@ -49,14 +53,33 @@ func (v *VolcengineAdvisor) Advise(ctx context.Context, prompt string) (string, 
 	requestBody := map[string]any{
 		"model":       v.model,
 		"temperature": 0.2,
-		"messages": []map[string]string{
+		"messages": []map[string]any{
 			{
 				"role":    "system",
 				"content": "你是资深软件交付专家，请输出可执行、可验证的工程建议。",
 			},
 			{
-				"role":    "user",
-				"content": userPrompt,
+				"role": "user",
+				"content": func() any {
+					if len(assetURLs) == 0 {
+						return userPrompt
+					}
+					content := []map[string]any{{
+						"type": "text",
+						"text": userPrompt,
+					}}
+					for _, raw := range assetURLs {
+						trimmed := strings.TrimSpace(raw)
+						if trimmed == "" {
+							continue
+						}
+						content = append(content, map[string]any{
+							"type":      "image_url",
+							"image_url": map[string]string{"url": trimmed},
+						})
+					}
+					return content
+				}(),
 			},
 		},
 	}

@@ -36,6 +36,10 @@ type apiTestEnv struct {
 }
 
 func newAPITestEnv(t *testing.T) apiTestEnv {
+	return newAPITestEnvWithConfig(t, DefaultServerConfig())
+}
+
+func newAPITestEnvWithConfig(t *testing.T, cfg ServerConfig) apiTestEnv {
 	t.Helper()
 	s, err := store.New(filepath.Join(t.TempDir(), "api.db"))
 	if err != nil {
@@ -47,7 +51,7 @@ func newAPITestEnv(t *testing.T) apiTestEnv {
 	pm := pipeline.NewManager(s, &fakeRunner{}, co)
 	pm.SetPhaseDelay(5 * time.Millisecond)
 	return apiTestEnv{
-		handler: NewServer(s, pm, co).Router(),
+		handler: NewServerWithConfig(s, pm, co, cfg).Router(),
 		store:   s,
 	}
 }
@@ -125,6 +129,142 @@ func TestCreateAndListProjects(t *testing.T) {
 	if len(response.Items) != 1 {
 		t.Fatalf("expected 1 project, got %d", len(response.Items))
 	}
+}
+
+func TestCreateProjectRateLimitedPerClient(t *testing.T) {
+	cfg := DefaultServerConfig()
+	cfg.RateLimit.Window = time.Minute
+	cfg.RateLimit.MutationLimit = 1
+	env := newAPITestEnvWithConfig(t, cfg)
+
+	makeRequest := func(name, clientIP string) *httptest.ResponseRecorder {
+		t.Helper()
+		payload, _ := json.Marshal(map[string]string{
+			"name":        name,
+			"description": "test project",
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/projects", bytes.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Forwarded-For", clientIP)
+		res := httptest.NewRecorder()
+		env.handler.ServeHTTP(res, req)
+		return res
+	}
+
+	first := makeRequest("Limited-1", "198.51.100.10")
+	if first.Code != http.StatusCreated {
+		t.Fatalf("expected first request 201, got %d", first.Code)
+	}
+	if first.Header().Get("X-RateLimit-Limit") != "1" {
+		t.Fatalf("expected X-RateLimit-Limit=1, got %q", first.Header().Get("X-RateLimit-Limit"))
+	}
+
+	second := makeRequest("Limited-2", "198.51.100.10")
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected second request 429, got %d", second.Code)
+	}
+	if second.Header().Get("Retry-After") == "" {
+		t.Fatalf("expected Retry-After header on 429 response")
+	}
+
+	third := makeRequest("Limited-3", "198.51.100.11")
+	if third.Code != http.StatusCreated {
+		t.Fatalf("expected request from another client to pass, got %d", third.Code)
+	}
+}
+
+func TestStartPipelineRateLimited(t *testing.T) {
+	cfg := DefaultServerConfig()
+	cfg.RateLimit.Window = time.Minute
+	cfg.RateLimit.PipelineLimit = 1
+	env := newAPITestEnvWithConfig(t, cfg)
+	project := createProjectViaAPI(t, env.handler, "PipelineRate")
+
+	payload, _ := json.Marshal(map[string]any{
+		"project_id": project.ID,
+		"prompt":     "???? pipeline ??",
+		"simulate":   true,
+	})
+
+	makeRequest := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/pipeline/runs", bytes.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Forwarded-For", "203.0.113.25")
+		res := httptest.NewRecorder()
+		env.handler.ServeHTTP(res, req)
+		return res
+	}
+
+	first := makeRequest()
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("expected first start to return 202, got %d", first.Code)
+	}
+
+	second := makeRequest()
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected second start to return 429, got %d", second.Code)
+	}
+}
+
+func TestPipelineRunAgentEndpoints(t *testing.T) {
+	env := newAPITestEnv(t)
+	project := createProjectViaAPI(t, env.handler, "Agent API")
+	ctx := context.Background()
+
+	run, err := env.store.CreatePipelineRun(ctx, store.PipelineRun{
+		ProjectID: project.ID,
+		Prompt:    "Build agent runtime",
+		Status:    "running",
+		Stage:     "step-by-step",
+	})
+	if err != nil {
+		t.Fatalf("create pipeline run: %v", err)
+	}
+	agentRun, err := env.store.CreateAgentRun(ctx, store.AgentRun{
+		PipelineRunID: run.ID,
+		ProjectID:     project.ID,
+		AgentName:     "delivery-agent",
+		ModeName:      "step_by_step",
+		Status:        "running",
+		CurrentNode:   "plan",
+	})
+	if err != nil {
+		t.Fatalf("create agent run: %v", err)
+	}
+	step, err := env.store.CreateAgentStep(ctx, store.AgentStep{
+		AgentRunID: agentRun.ID,
+		NodeName:   "retrieve",
+		Title:      "Retrieve evidence",
+		InputJSON:  `{"query":"agent"}`,
+	})
+	if err != nil {
+		t.Fatalf("create agent step: %v", err)
+	}
+	if _, err := env.store.CreateAgentToolCall(ctx, store.AgentToolCall{AgentStepID: step.ID, ToolName: "search_context", RequestJSON: `{}`, ResponseJSON: `{"count":1}`, Success: true}); err != nil {
+		t.Fatalf("create tool call: %v", err)
+	}
+	if _, err := env.store.CreateAgentEvidence(ctx, store.AgentEvidence{AgentStepID: step.ID, SourceType: "memory", SourceID: "mem-1", Title: "Memory", Snippet: "Need traceability", Score: 0.8}); err != nil {
+		t.Fatalf("create evidence: %v", err)
+	}
+	if _, err := env.store.CreateAgentEvaluation(ctx, store.AgentEvaluation{AgentStepID: step.ID, EvaluationType: "step-outcome", Verdict: "pass", Reason: "good", NextAction: "continue"}); err != nil {
+		t.Fatalf("create evaluation: %v", err)
+	}
+
+	assertEndpoint := func(path string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		res := httptest.NewRecorder()
+		env.handler.ServeHTTP(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("expected 200 for %s, got %d (%s)", path, res.Code, res.Body.String())
+		}
+	}
+
+	assertEndpoint("/api/pipeline/runs/" + run.ID + "/agent")
+	assertEndpoint("/api/pipeline/runs/" + run.ID + "/agent/steps")
+	assertEndpoint("/api/pipeline/runs/" + run.ID + "/agent/tool-calls")
+	assertEndpoint("/api/pipeline/runs/" + run.ID + "/agent/evidence")
+	assertEndpoint("/api/pipeline/runs/" + run.ID + "/agent/evaluations")
 }
 
 func TestAutoScheduleTasksEndpoint(t *testing.T) {
@@ -886,6 +1026,15 @@ func TestPipelineCompletionAndPreviewEndpoints(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(frontendDir, "app.js"), []byte("console.log('preview');"), 0o644); err != nil {
 		t.Fatalf("write preview js: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(projectDir, "output", "studio-concept.md"), []byte("# ?????\n\n???????"), 0o644); err != nil {
+		t.Fatalf("write concept doc: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "output", "studio-prd.md"), []byte("# PRD\n\n??????"), 0o644); err != nil {
+		t.Fatalf("write prd doc: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "output", "studio-reflection.md"), []byte("# ??????\n\n?????????"), 0o644); err != nil {
+		t.Fatalf("write reflection doc: %v", err)
+	}
 
 	ctx := context.Background()
 	run, err := env.store.CreatePipelineRun(ctx, store.PipelineRun{
@@ -921,6 +1070,25 @@ func TestPipelineCompletionAndPreviewEndpoints(t *testing.T) {
 	}
 	if len(completion.Checklist) == 0 {
 		t.Fatalf("expected completion checklist items")
+	}
+	if len(completion.Stages) == 0 {
+		t.Fatalf("expected staged artifacts in completion response")
+	}
+	ideaFound := false
+	designFound := false
+	rethinkFound := false
+	for _, stage := range completion.Stages {
+		switch stage.Key {
+		case "idea":
+			ideaFound = len(stage.Artifacts) > 0
+		case "design":
+			designFound = len(stage.Artifacts) > 0
+		case "rethink":
+			rethinkFound = len(stage.Artifacts) > 0
+		}
+	}
+	if !ideaFound || !designFound || !rethinkFound {
+		t.Fatalf("expected idea/design/rethink artifacts in staged response")
 	}
 
 	previewReq := httptest.NewRequest(http.MethodGet, completion.PreviewURL, nil)

@@ -1,0 +1,24 @@
+{
+  "project_name": "superdev-studio",
+  "generated_at": "2026-03-07T17:21:54.670706+00:00",
+  "coverage_percent": 60.1,
+  "coverage_scope": "full-backend",
+  "coverage_fallback_reason": null,
+  "coverage_xml": "coverage\\cobertura-coverage.xml",
+  "python3_shim": "coverage\\.shims\\python3.cmd",
+  "redteam": {
+    "score": 52,
+    "passed": false,
+    "critical_count": 0,
+    "high_count": 1
+  },
+  "quality_gate": {
+    "score": 95,
+    "passed": true,
+    "critical_failures": [],
+    "recommendations": [
+      "建议: Spec 任务闭环状态",
+      "建议: 覆盖率报告"
+    ]
+  }
+}
