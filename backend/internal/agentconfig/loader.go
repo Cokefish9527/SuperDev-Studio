@@ -109,6 +109,66 @@ func defaultBundle() Bundle {
 	}
 }
 
+func (b Bundle) FindAgent(name string) (AgentConfig, bool) {
+	needle := strings.TrimSpace(name)
+	for _, item := range b.Agents {
+		if strings.EqualFold(strings.TrimSpace(item.Name), needle) {
+			return item, true
+		}
+	}
+	return AgentConfig{}, false
+}
+
+func (b Bundle) FindMode(name string) (ModeConfig, bool) {
+	needle := strings.TrimSpace(name)
+	for _, item := range b.Modes {
+		if strings.EqualFold(strings.TrimSpace(item.Name), needle) {
+			return item, true
+		}
+	}
+	return ModeConfig{}, false
+}
+
+func (b Bundle) ResolveAgent(name string) AgentConfig {
+	if item, ok := b.FindAgent(name); ok {
+		return item
+	}
+	if len(b.Agents) > 0 {
+		return b.Agents[0]
+	}
+	return AgentConfig{Name: "delivery-agent"}
+}
+
+func (b Bundle) ResolveMode(name string) ModeConfig {
+	if item, ok := b.FindMode(name); ok {
+		return item
+	}
+	if len(b.Modes) > 0 {
+		return b.Modes[0]
+	}
+	return ModeConfig{Name: "step_by_step"}
+}
+
+func (b Bundle) AgentNames() []string {
+	items := make([]string, 0, len(b.Agents))
+	for _, item := range b.Agents {
+		if name := strings.TrimSpace(item.Name); name != "" {
+			items = append(items, name)
+		}
+	}
+	return items
+}
+
+func (b Bundle) ModeNames() []string {
+	items := make([]string, 0, len(b.Modes))
+	for _, item := range b.Modes {
+		if name := strings.TrimSpace(item.Name); name != "" {
+			items = append(items, name)
+		}
+	}
+	return items
+}
+
 func loadConfigs[T any](dir string, target *[]T) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {

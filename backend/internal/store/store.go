@@ -53,6 +53,8 @@ func (s *Store) migrate(ctx context.Context) error {
 			default_frontend TEXT NOT NULL DEFAULT 'react',
 			default_backend TEXT NOT NULL DEFAULT 'go',
 			default_domain TEXT NOT NULL DEFAULT '',
+			default_agent_name TEXT NOT NULL DEFAULT 'delivery-agent',
+			default_agent_mode TEXT NOT NULL DEFAULT 'step_by_step',
 			default_context_mode TEXT NOT NULL DEFAULT 'auto',
 			default_context_token_budget INTEGER NOT NULL DEFAULT 1200,
 			default_context_max_items INTEGER NOT NULL DEFAULT 8,
@@ -308,6 +310,8 @@ func (s *Store) ensureProjectColumns(ctx context.Context) error {
 		{name: "default_frontend", definition: "TEXT NOT NULL DEFAULT 'react'"},
 		{name: "default_backend", definition: "TEXT NOT NULL DEFAULT 'go'"},
 		{name: "default_domain", definition: "TEXT NOT NULL DEFAULT ''"},
+		{name: "default_agent_name", definition: "TEXT NOT NULL DEFAULT 'delivery-agent'"},
+		{name: "default_agent_mode", definition: "TEXT NOT NULL DEFAULT 'step_by_step'"},
 		{name: "default_context_mode", definition: "TEXT NOT NULL DEFAULT 'auto'"},
 		{name: "default_context_token_budget", definition: "INTEGER NOT NULL DEFAULT 1200"},
 		{name: "default_context_max_items", definition: "INTEGER NOT NULL DEFAULT 8"},
@@ -447,6 +451,12 @@ func applyProjectDefaults(project *Project) {
 	if strings.TrimSpace(project.DefaultBackend) == "" {
 		project.DefaultBackend = "go"
 	}
+	if strings.TrimSpace(project.DefaultAgentName) == "" {
+		project.DefaultAgentName = "delivery-agent"
+	}
+	if strings.TrimSpace(project.DefaultAgentMode) == "" {
+		project.DefaultAgentMode = "step_by_step"
+	}
 	if strings.TrimSpace(project.DefaultContextMode) == "" {
 		project.DefaultContextMode = "auto"
 	}
@@ -471,6 +481,8 @@ func scanProject(scanner rowScanner, project *Project) error {
 		&project.DefaultFrontend,
 		&project.DefaultBackend,
 		&project.DefaultDomain,
+		&project.DefaultAgentName,
+		&project.DefaultAgentMode,
 		&project.DefaultContextMode,
 		&project.DefaultContextTokenBudget,
 		&project.DefaultContextMaxItems,
@@ -611,10 +623,11 @@ func (s *Store) CreateProject(ctx context.Context, p Project) (Project, error) {
 		`INSERT INTO projects(
 			id, name, description, repo_path, status,
 			default_platform, default_frontend, default_backend, default_domain,
+			default_agent_name, default_agent_mode,
 			default_context_mode, default_context_token_budget, default_context_max_items,
 			default_context_dynamic, default_memory_writeback,
 			created_at, updated_at
-		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.ID,
 		p.Name,
 		p.Description,
@@ -624,6 +637,8 @@ func (s *Store) CreateProject(ctx context.Context, p Project) (Project, error) {
 		p.DefaultFrontend,
 		p.DefaultBackend,
 		p.DefaultDomain,
+		p.DefaultAgentName,
+		p.DefaultAgentMode,
 		p.DefaultContextMode,
 		p.DefaultContextTokenBudget,
 		p.DefaultContextMaxItems,
@@ -644,6 +659,7 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 		`SELECT
 			id, name, description, repo_path, status,
 			default_platform, default_frontend, default_backend, default_domain,
+			default_agent_name, default_agent_mode,
 			default_context_mode, default_context_token_budget, default_context_max_items,
 			default_context_dynamic, default_memory_writeback,
 			created_at, updated_at
@@ -673,6 +689,7 @@ func (s *Store) GetProject(ctx context.Context, projectID string) (Project, erro
 			`SELECT
 				id, name, description, repo_path, status,
 				default_platform, default_frontend, default_backend, default_domain,
+				default_agent_name, default_agent_mode,
 				default_context_mode, default_context_token_budget, default_context_max_items,
 				default_context_dynamic, default_memory_writeback,
 				created_at, updated_at
@@ -721,6 +738,12 @@ func (s *Store) UpdateProjectWithDefaults(ctx context.Context, projectID string,
 		p.DefaultBackend = patch.DefaultBackend
 	}
 	p.DefaultDomain = patch.DefaultDomain
+	if strings.TrimSpace(patch.DefaultAgentName) != "" {
+		p.DefaultAgentName = patch.DefaultAgentName
+	}
+	if strings.TrimSpace(patch.DefaultAgentMode) != "" {
+		p.DefaultAgentMode = patch.DefaultAgentMode
+	}
 	if strings.TrimSpace(patch.DefaultContextMode) != "" {
 		p.DefaultContextMode = patch.DefaultContextMode
 	}
@@ -740,6 +763,7 @@ func (s *Store) UpdateProjectWithDefaults(ctx context.Context, projectID string,
 		`UPDATE projects SET
 			name=?, description=?, repo_path=?, status=?,
 			default_platform=?, default_frontend=?, default_backend=?, default_domain=?,
+			default_agent_name=?, default_agent_mode=?,
 			default_context_mode=?, default_context_token_budget=?, default_context_max_items=?,
 			default_context_dynamic=?, default_memory_writeback=?,
 			updated_at=?
@@ -752,6 +776,8 @@ func (s *Store) UpdateProjectWithDefaults(ctx context.Context, projectID string,
 		p.DefaultFrontend,
 		p.DefaultBackend,
 		p.DefaultDomain,
+		p.DefaultAgentName,
+		p.DefaultAgentMode,
 		p.DefaultContextMode,
 		p.DefaultContextTokenBudget,
 		p.DefaultContextMaxItems,

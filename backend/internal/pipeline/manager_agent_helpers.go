@@ -12,27 +12,32 @@ import (
 )
 
 type stepAgentSession struct {
-	Run          store.AgentRun
-	Config       agentconfig.Bundle
-	AllowedTools []string
+	Run           store.AgentRun
+	Config        agentconfig.Bundle
+	SelectedAgent agentconfig.AgentConfig
+	SelectedMode  agentconfig.ModeConfig
+	AllowedTools  []string
 }
 
 func (m *Manager) bootstrapStepAgent(ctx context.Context, runID string, req StartRequest) *stepAgentSession {
 	if m.agentRun == nil {
 		return nil
 	}
-	existing, err := m.agentRun.GetRunByPipelineRun(ctx, runID)
-	if err == nil {
-		bundle, _ := agentconfig.LoadProjectBundle(req.Options.ProjectDir)
-		return &stepAgentSession{Run: existing, Config: bundle, AllowedTools: resolveAllowedTools(bundle)}
-	}
 	bundle, _ := agentconfig.LoadProjectBundle(req.Options.ProjectDir)
+	selectedAgent := bundle.ResolveAgent(req.Agent.Name)
+	selectedMode := bundle.ResolveMode(req.Agent.Mode)
+	allowedTools := resolveAllowedTools(bundle, selectedAgent.Name)
+	if existing, err := m.agentRun.GetRunByPipelineRun(ctx, runID); err == nil {
+		selectedAgent = bundle.ResolveAgent(existing.AgentName)
+		selectedMode = bundle.ResolveMode(existing.ModeName)
+		return &stepAgentSession{Run: existing, Config: bundle, SelectedAgent: selectedAgent, SelectedMode: selectedMode, AllowedTools: resolveAllowedTools(bundle, existing.AgentName)}
+	}
 	run, err := m.agentRun.StartRun(ctx, agentruntime.StartRunRequest{
 		PipelineRunID: runID,
 		ProjectID:     req.ProjectID,
 		ChangeBatchID: req.ChangeBatchID,
-		AgentName:     "delivery-agent",
-		ModeName:      "step_by_step",
+		AgentName:     selectedAgent.Name,
+		ModeName:      selectedMode.Name,
 		CurrentNode:   "bootstrap",
 	})
 	if err != nil {
@@ -40,7 +45,7 @@ func (m *Manager) bootstrapStepAgent(ctx context.Context, runID string, req Star
 		return nil
 	}
 	_, _ = m.store.AppendRunEvent(ctx, store.RunEvent{RunID: runID, Stage: "step-agent", Status: "running", Message: fmt.Sprintf("Agent runtime bootstrapped: %s (%s)", run.AgentName, run.ModeName)})
-	return &stepAgentSession{Run: run, Config: bundle, AllowedTools: resolveAllowedTools(bundle)}
+	return &stepAgentSession{Run: run, Config: bundle, SelectedAgent: selectedAgent, SelectedMode: selectedMode, AllowedTools: allowedTools}
 }
 
 func (m *Manager) finishStepAgent(ctx context.Context, session *stepAgentSession, currentNode, summary string) {
@@ -126,7 +131,10 @@ func (m *Manager) runAgentCommandStage(ctx context.Context, runID string, option
 	return err
 }
 
-func resolveAllowedTools(bundle agentconfig.Bundle) []string {
+func resolveAllowedTools(bundle agentconfig.Bundle, agentName string) []string {
+	if item, ok := bundle.FindAgent(agentName); ok && len(item.AllowedTools) > 0 {
+		return item.AllowedTools
+	}
 	if len(bundle.Agents) > 0 && len(bundle.Agents[0].AllowedTools) > 0 {
 		return bundle.Agents[0].AllowedTools
 	}

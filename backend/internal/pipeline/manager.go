@@ -60,6 +60,7 @@ type StartRequest struct {
 	Simulate      bool
 	RetryOf       string
 	LLM           LLMOptions
+	Agent         AgentOptions
 	Context       ContextOptions
 	Lifecycle     LifecycleOptions
 	Options       RunRequest
@@ -68,6 +69,11 @@ type StartRequest struct {
 type LLMOptions struct {
 	EnhancedLoop     bool
 	MultimodalAssets []string
+}
+
+type AgentOptions struct {
+	Name string
+	Mode string
 }
 
 type LifecycleOptions struct {

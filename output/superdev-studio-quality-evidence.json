@@ -1,7 +1,7 @@
 {
   "project_name": "superdev-studio",
-  "generated_at": "2026-03-07T17:43:48.819580+00:00",
-  "coverage_percent": 60.1,
+  "generated_at": "2026-03-07T19:14:40.607276+00:00",
+  "coverage_percent": 59.6,
   "coverage_scope": "full-backend",
   "coverage_fallback_reason": null,
   "coverage_xml": "coverage\\cobertura-coverage.xml",
@@ -13,11 +13,13 @@
     "high_count": 1
   },
   "quality_gate": {
-    "score": 95,
-    "passed": true,
-    "critical_failures": [],
+    "score": 92,
+    "passed": false,
+    "critical_failures": [
+      "[testing] Spec 任务闭环状态"
+    ],
     "recommendations": [
-      "建议: Spec 任务闭环状态",
+      "修复: Spec 任务闭环状态",
       "建议: 覆盖率报告"
     ]
   }

@@ -50,3 +50,25 @@ func TestLoadProjectBundleReadsProjectConfigs(t *testing.T) {
 		t.Fatalf("expected custom command override, got %#v", bundle.Commands)
 	}
 }
+
+func TestBundleResolveSelectionFallsBackToDefaults(t *testing.T) {
+	bundle := defaultBundle()
+	agent := bundle.ResolveAgent("missing")
+	mode := bundle.ResolveMode("missing")
+	if agent.Name != "delivery-agent" {
+		t.Fatalf("expected fallback agent delivery-agent, got %q", agent.Name)
+	}
+	if mode.Name != "step_by_step" {
+		t.Fatalf("expected fallback mode step_by_step, got %q", mode.Name)
+	}
+}
+
+func TestBundleFindAgentAndMode(t *testing.T) {
+	bundle := defaultBundle()
+	if _, ok := bundle.FindAgent("delivery-agent"); !ok {
+		t.Fatalf("expected delivery-agent to be found")
+	}
+	if _, ok := bundle.FindMode("step_by_step"); !ok {
+		t.Fatalf("expected step_by_step mode to be found")
+	}
+}

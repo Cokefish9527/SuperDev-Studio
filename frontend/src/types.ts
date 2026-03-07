@@ -8,6 +8,8 @@ export type Project = {
   default_frontend: string;
   default_backend: string;
   default_domain: string;
+  default_agent_name: string;
+  default_agent_mode: string;
   default_context_mode: 'off' | 'auto' | 'manual' | string;
   default_context_token_budget: number;
   default_context_max_items: number;
@@ -158,6 +160,32 @@ export type PipelineRunAgent = {
   tool_call_count: number;
   evidence_count: number;
   evaluation_count: number;
+};
+
+export type AgentProfile = {
+  name: string;
+  description: string;
+  default_model?: string;
+  allowed_tools?: string[];
+  default_skills?: string[];
+  max_steps?: number;
+};
+
+export type AgentModeProfile = {
+  name: string;
+  description: string;
+  allow_deploy?: boolean;
+  max_retries?: number;
+  require_approval?: boolean;
+};
+
+export type ProjectAgentBundle = {
+  project_id: string;
+  project_dir: string;
+  default_agent_name: string;
+  default_agent_mode: string;
+  agents: AgentProfile[];
+  modes: AgentModeProfile[];
 };
 
 export type Memory = {

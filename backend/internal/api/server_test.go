@@ -12,8 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"superdevstudio/internal/agentruntime/eino"
 	"superdevstudio/internal/contextopt"
 	"superdevstudio/internal/pipeline"
+	"superdevstudio/internal/retrieval"
 	"superdevstudio/internal/store"
 )
 
@@ -31,8 +33,9 @@ func (f *fakeRunner) RunCommand(_ context.Context, _ pipeline.RunRequest, comman
 }
 
 type apiTestEnv struct {
-	handler http.Handler
-	store   *store.Store
+	handler  http.Handler
+	store    *store.Store
+	pipeline *pipeline.Manager
 }
 
 func newAPITestEnv(t *testing.T) apiTestEnv {
@@ -51,17 +54,32 @@ func newAPITestEnvWithConfig(t *testing.T, cfg ServerConfig) apiTestEnv {
 	pm := pipeline.NewManager(s, &fakeRunner{}, co)
 	pm.SetPhaseDelay(5 * time.Millisecond)
 	return apiTestEnv{
-		handler: NewServerWithConfig(s, pm, co, cfg).Router(),
-		store:   s,
+		handler:  NewServerWithConfig(s, pm, co, cfg).Router(),
+		store:    s,
+		pipeline: pm,
 	}
+}
+
+func enableAgentRuntimeForTest(t *testing.T, env apiTestEnv) {
+	t.Helper()
+	runtime, err := eino.New(context.Background(), env.store, retrieval.NewService(env.store), eino.Config{})
+	if err != nil {
+		t.Fatalf("new agent runtime: %v", err)
+	}
+	env.pipeline.SetAgentRuntime(runtime)
 }
 
 func createProjectViaAPI(t *testing.T, handler http.Handler, name string) store.Project {
 	t.Helper()
-	payload, _ := json.Marshal(map[string]string{
+	return createProjectViaAPIWithPayload(t, handler, map[string]any{
 		"name":        name,
 		"description": "test project",
 	})
+}
+
+func createProjectViaAPIWithPayload(t *testing.T, handler http.Handler, payloadMap map[string]any) store.Project {
+	t.Helper()
+	payload, _ := json.Marshal(payloadMap)
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/projects", bytes.NewReader(payload))
 	createReq.Header.Set("Content-Type", "application/json")
@@ -1099,5 +1117,131 @@ func TestPipelineCompletionAndPreviewEndpoints(t *testing.T) {
 	}
 	if !strings.Contains(previewRes.Body.String(), "preview") {
 		t.Fatalf("expected preview content body")
+	}
+}
+
+func TestProjectAgentBundleEndpoint(t *testing.T) {
+	env := newAPITestEnv(t)
+	repoRoot := t.TempDir()
+	configRoot := filepath.Join(repoRoot, ".studio-agent")
+	for _, dir := range []string{"agents", "modes"} {
+		if err := os.MkdirAll(filepath.Join(configRoot, dir), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(configRoot, "agents", "reviewer.yaml"), []byte(`name: reviewer
+description: review agent
+allowed_tools:
+  - search_context
+`), 0o644); err != nil {
+		t.Fatalf("write reviewer: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configRoot, "modes", "review.yaml"), []byte(`name: review
+description: review mode
+max_retries: 2
+`), 0o644); err != nil {
+		t.Fatalf("write review mode: %v", err)
+	}
+	project := createProjectViaAPIWithPayload(t, env.handler, map[string]any{
+		"name":               "BundleProject",
+		"description":        "test project",
+		"repo_path":          repoRoot,
+		"default_agent_name": "reviewer",
+		"default_agent_mode": "review",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+project.ID+"/agent-bundle", nil)
+	res := httptest.NewRecorder()
+	env.handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", res.Code)
+	}
+	var response struct {
+		ProjectID        string `json:"project_id"`
+		DefaultAgentName string `json:"default_agent_name"`
+		DefaultAgentMode string `json:"default_agent_mode"`
+		Agents           []struct {
+			Name string `json:"name"`
+		} `json:"agents"`
+		Modes []struct {
+			Name string `json:"name"`
+		} `json:"modes"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode bundle response: %v", err)
+	}
+	if response.ProjectID != project.ID {
+		t.Fatalf("expected project id %s, got %s", project.ID, response.ProjectID)
+	}
+	if response.DefaultAgentName != "reviewer" || response.DefaultAgentMode != "review" {
+		t.Fatalf("unexpected defaults %q/%q", response.DefaultAgentName, response.DefaultAgentMode)
+	}
+	if len(response.Agents) != 1 || response.Agents[0].Name != "reviewer" {
+		t.Fatalf("expected reviewer agent, got %#v", response.Agents)
+	}
+	if len(response.Modes) != 1 || response.Modes[0].Name != "review" {
+		t.Fatalf("expected review mode, got %#v", response.Modes)
+	}
+}
+
+func TestStartPipelineStepByStepUsesProjectAgentDefaults(t *testing.T) {
+	env := newAPITestEnv(t)
+	enableAgentRuntimeForTest(t, env)
+	ctx := context.Background()
+	repoRoot := t.TempDir()
+	configRoot := filepath.Join(repoRoot, ".studio-agent")
+	for _, dir := range []string{"agents", "modes"} {
+		if err := os.MkdirAll(filepath.Join(configRoot, dir), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(configRoot, "agents", "reviewer.yaml"), []byte(`name: reviewer
+description: review agent
+allowed_tools:
+  - run_superdev_task_status
+`), 0o644); err != nil {
+		t.Fatalf("write reviewer: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configRoot, "modes", "review.yaml"), []byte(`name: review
+description: review mode
+max_retries: 2
+`), 0o644); err != nil {
+		t.Fatalf("write review mode: %v", err)
+	}
+	project := createProjectViaAPIWithPayload(t, env.handler, map[string]any{
+		"name":               "AgentSelection",
+		"description":        "test project",
+		"repo_path":          repoRoot,
+		"default_agent_name": "reviewer",
+		"default_agent_mode": "review",
+	})
+
+	payload, _ := json.Marshal(map[string]any{
+		"project_id":   project.ID,
+		"prompt":       "Use default agent selection in step-by-step mode",
+		"step_by_step": true,
+		"project_dir":  repoRoot,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/pipeline/runs", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	env.handler.ServeHTTP(res, req)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", res.Code)
+	}
+	var run store.PipelineRun
+	if err := json.Unmarshal(res.Body.Bytes(), &run); err != nil {
+		t.Fatalf("decode run: %v", err)
+	}
+	waitForRunCompletion(t, env.store, run.ID)
+	agentRun, err := env.store.GetAgentRunByPipelineRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get agent run: %v", err)
+	}
+	if agentRun.AgentName != "reviewer" {
+		t.Fatalf("expected reviewer agent, got %q", agentRun.AgentName)
+	}
+	if agentRun.ModeName != "review" {
+		t.Fatalf("expected review mode, got %q", agentRun.ModeName)
 	}
 }

@@ -12,6 +12,8 @@ type Project struct {
 	DefaultFrontend           string    `json:"default_frontend"`
 	DefaultBackend            string    `json:"default_backend"`
 	DefaultDomain             string    `json:"default_domain"`
+	DefaultAgentName          string    `json:"default_agent_name"`
+	DefaultAgentMode          string    `json:"default_agent_mode"`
 	DefaultContextMode        string    `json:"default_context_mode"`
 	DefaultContextTokenBudget int       `json:"default_context_token_budget"`
 	DefaultContextMaxItems    int       `json:"default_context_max_items"`

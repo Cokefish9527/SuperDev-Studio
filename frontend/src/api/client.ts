@@ -15,6 +15,7 @@ import type {
   ProjectAdvanceResponse,
   PipelineRun,
   Project,
+  ProjectAgentBundle,
   RunEvent,
   Task,
 } from '../types';
@@ -37,6 +38,7 @@ export const apiClient = {
   createProject: async (payload: Partial<Project>) => (await api.post<Project>('/api/projects', payload)).data,
   updateProject: async (id: string, payload: Partial<Project>) => (await api.put<Project>(`/api/projects/${id}`, payload)).data,
   deleteProject: async (id: string) => (await api.delete<{ status: string }>(`/api/projects/${id}`)).data,
+  getProjectAgentBundle: async (id: string) => (await api.get<ProjectAgentBundle>(`/api/projects/${id}/agent-bundle`)).data,
 
   listChangeBatches: async (projectId: string) =>
     unwrapItems<ChangeBatch>(api.get(`/api/projects/${projectId}/change-batches`)),
@@ -135,6 +137,8 @@ export const apiClient = {
     context_max_items?: number;
     context_dynamic?: boolean;
     memory_writeback?: boolean;
+    agent_name?: string;
+    agent_mode?: string;
   }) => (await api.post<PipelineRun>('/api/pipeline/runs', payload)).data,
   retryPipeline: async (runId: string) =>
     (await api.post<PipelineRun>(`/api/pipeline/runs/${runId}/retry`)).data,

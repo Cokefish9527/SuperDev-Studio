@@ -13,6 +13,7 @@ import {
   InputNumber,
   Progress,
   Row,
+  Select,
   Space,
   Switch,
   Table,
@@ -57,6 +58,8 @@ type PipelineFormValues = {
   context_max_items?: number;
   context_dynamic?: boolean;
   memory_writeback?: boolean;
+  agent_name?: string;
+  agent_mode?: string;
 };
 
 const STAGE_FALLBACK: PipelineStage[] = [
@@ -91,6 +94,11 @@ export default function PipelinePage() {
     queryFn: () => apiClient.getProject(activeProjectId),
     enabled: !!activeProjectId,
   });
+  const bundleQuery = useQuery({
+    queryKey: ['project-agent-bundle', activeProjectId],
+    queryFn: () => apiClient.getProjectAgentBundle(activeProjectId),
+    enabled: !!activeProjectId,
+  });
   const changeBatchesQuery = useQuery({
     queryKey: ['change-batches', activeProjectId],
     queryFn: () => apiClient.listChangeBatches(activeProjectId),
@@ -102,6 +110,14 @@ export default function PipelinePage() {
   const selectedRunId = runs.some((item) => item.id === manualSelectedRunId)
     ? manualSelectedRunId
     : runs[0]?.id ?? '';
+  const agentOptions = useMemo(
+    () => buildSelectOptions([...(bundleQuery.data?.agents ?? []).map((item) => item.name), projectQuery.data?.default_agent_name]),
+    [bundleQuery.data, projectQuery.data],
+  );
+  const agentModeOptions = useMemo(
+    () => buildSelectOptions([...(bundleQuery.data?.modes ?? []).map((item) => item.name), projectQuery.data?.default_agent_mode]),
+    [bundleQuery.data, projectQuery.data],
+  );
 
   const runQuery = useQuery({
     queryKey: ['run', selectedRunId],
@@ -182,6 +198,14 @@ export default function PipelinePage() {
         step_by_step: false,
         iteration_limit: 3,
         llm_enhanced_loop: true,
+        project_dir: projectQuery.data?.repo_path || undefined,
+        context_mode: normalizeContextMode(projectQuery.data?.default_context_mode),
+        context_token_budget: projectQuery.data?.default_context_token_budget,
+        context_max_items: projectQuery.data?.default_context_max_items,
+        context_dynamic: projectQuery.data?.default_context_dynamic,
+        memory_writeback: projectQuery.data?.default_memory_writeback,
+        agent_name: projectQuery.data?.default_agent_name,
+        agent_mode: projectQuery.data?.default_agent_mode,
       });
       void queryClient.invalidateQueries({ queryKey: ['runs', activeProjectId] });
     },
@@ -218,6 +242,8 @@ export default function PipelinePage() {
       context_max_items: project.default_context_max_items,
       context_dynamic: project.default_context_dynamic,
       memory_writeback: project.default_memory_writeback,
+      agent_name: project.default_agent_name,
+      agent_mode: project.default_agent_mode,
       llm_enhanced_loop: true,
     });
   }, [form, projectQuery.data]);
@@ -329,6 +355,8 @@ export default function PipelinePage() {
                       context_max_items: values.context_max_items,
                       context_dynamic: values.context_dynamic,
                       memory_writeback: values.memory_writeback,
+                      agent_name: values.agent_name,
+                      agent_mode: values.agent_mode,
                     });
                   }}
                 >
@@ -377,6 +405,24 @@ export default function PipelinePage() {
                       <InputNumber min={1} max={8} style={{ width: '100%' }} />
                     </Form.Item>
                   ) : null}
+
+                  <Card size="small" title="step_by_step Agent Strategy" style={{ marginBottom: 16, borderRadius: 16 }}>
+                    <Row gutter={12}>
+                      <Col span={12}>
+                        <Form.Item name="agent_name" label="Agent">
+                          <Select options={agentOptions} placeholder="delivery-agent" disabled={!stepByStep} />
+                        </Form.Item>
+                      </Col>
+                      <Col span={12}>
+                        <Form.Item name="agent_mode" label="Agent Mode">
+                          <Select options={agentModeOptions} placeholder="step_by_step" disabled={!stepByStep} />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                    <Typography.Text type="secondary">
+                      Options come from the project `.studio-agent` bundle; AgentRun is created only when step_by_step is enabled.
+                    </Typography.Text>
+                  </Card>
 
                   <Form.Item name="multimodal_assets_text" label="多模态参考素材 URL（每行一个，可选）">
                     <Input.TextArea rows={4} placeholder={'https://example.com/wireframe.png\nhttps://example.com/brand-board.jpg'} disabled={!llmEnhancedLoop} />
@@ -569,6 +615,10 @@ function pickDefaultArtifact(artifacts: PipelineArtifact[]) {
     }
   }
   return artifacts[0];
+}
+
+function buildSelectOptions(values: Array<string | undefined>) {
+  return Array.from(new Set(values.map((item) => (item ?? "").trim()).filter(Boolean))).map((value) => ({ value, label: value }));
 }
 
 function parseMultimodalAssets(raw?: string) {

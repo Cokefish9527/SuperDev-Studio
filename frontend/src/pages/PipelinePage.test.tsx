@@ -12,6 +12,8 @@ vi.mock('../api/client', async (importOriginal) => {
     apiClient: {
       ...actual.apiClient,
       listRuns: vi.fn(),
+      getProject: vi.fn(),
+      getProjectAgentBundle: vi.fn(),
       getRun: vi.fn(),
       getRunCompletion: vi.fn(),
       listRunEvents: vi.fn(),
@@ -30,6 +32,34 @@ describe('PipelinePage', () => {
     localStorage.setItem('superdev-studio-active-project', 'project-1');
     vi.clearAllMocks();
     vi.mocked(apiClient.listRuns).mockResolvedValue([]);
+    vi.mocked(apiClient.getProject).mockResolvedValue({
+      id: 'project-1',
+      name: 'Studio',
+      description: 'test',
+      repo_path: 'D:/Work/agent-demo/SuperDev-Studio',
+      status: 'active',
+      default_platform: 'web',
+      default_frontend: 'react',
+      default_backend: 'go',
+      default_domain: 'saas',
+      default_agent_name: 'reviewer',
+      default_agent_mode: 'review',
+      default_context_mode: 'auto',
+      default_context_token_budget: 1200,
+      default_context_max_items: 8,
+      default_context_dynamic: true,
+      default_memory_writeback: true,
+      created_at: '2026-03-05T00:00:00Z',
+      updated_at: '2026-03-05T00:00:00Z',
+    });
+    vi.mocked(apiClient.getProjectAgentBundle).mockResolvedValue({
+      project_id: 'project-1',
+      project_dir: 'D:/Work/agent-demo/SuperDev-Studio',
+      default_agent_name: 'reviewer',
+      default_agent_mode: 'review',
+      agents: [{ name: 'reviewer', description: 'Review agent' }],
+      modes: [{ name: 'review', description: 'Review mode' }],
+    });
     vi.mocked(apiClient.getRun).mockResolvedValue({
       id: 'run-1',
       project_id: 'project-1',
@@ -169,6 +199,43 @@ describe('PipelinePage', () => {
           prompt: '逐步开发需求',
           step_by_step: true,
           simulate: false,
+        }),
+      );
+    });
+  }, 12000);
+
+
+  it('submits step_by_step with default agent strategy', async () => {
+    vi.mocked(apiClient.startPipeline).mockResolvedValue({
+      id: 'run-agent',
+      project_id: 'project-1',
+      prompt: '逐步执行并使用默认 Agent',
+      status: 'queued',
+      progress: 0,
+      stage: 'queued',
+      created_at: '2026-03-05T00:00:00Z',
+      updated_at: '2026-03-05T00:00:00Z',
+    });
+
+    renderWithProviders(<PipelinePage />);
+
+    await userEvent.click(screen.getByRole('switch', { name: '按 super-dev 原生步骤执行' }));
+    await userEvent.clear(screen.getByPlaceholderText('例如：实现一个支持知识库检索和项目任务管理的开发协作平台'));
+    await userEvent.type(
+      screen.getByPlaceholderText('例如：实现一个支持知识库检索和项目任务管理的开发协作平台'),
+      '逐步执行并使用默认 Agent',
+    );
+    await userEvent.click(screen.getByRole('button', { name: '启动流水线' }));
+
+    await waitFor(() => {
+      expect(apiClient.startPipeline).toHaveBeenCalled();
+      const [payload] = vi.mocked(apiClient.startPipeline).mock.calls.at(-1)!;
+      expect(payload).toEqual(
+        expect.objectContaining({
+          prompt: '逐步执行并使用默认 Agent',
+          step_by_step: true,
+          agent_name: 'reviewer',
+          agent_mode: 'review',
         }),
       );
     });

@@ -270,3 +270,35 @@ func TestStore_AgentRuntimeFlow(t *testing.T) {
 		t.Fatalf("expected 1 evaluation record, got %d", len(evals))
 	}
 }
+
+func TestStore_ProjectAgentDefaultsPersist(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	project, err := s.CreateProject(ctx, Project{
+		Name:             "AgentDefaults",
+		DefaultAgentName: "reviewer",
+		DefaultAgentMode: "review",
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	if project.DefaultAgentName != "reviewer" {
+		t.Fatalf("expected default agent reviewer, got %q", project.DefaultAgentName)
+	}
+	if project.DefaultAgentMode != "review" {
+		t.Fatalf("expected default mode review, got %q", project.DefaultAgentMode)
+	}
+
+	updated, err := s.UpdateProjectWithDefaults(ctx, project.ID, Project{
+		Name:             project.Name,
+		DefaultAgentName: "delivery-agent",
+		DefaultAgentMode: "step_by_step",
+	})
+	if err != nil {
+		t.Fatalf("update project: %v", err)
+	}
+	if updated.DefaultAgentName != "delivery-agent" || updated.DefaultAgentMode != "step_by_step" {
+		t.Fatalf("expected updated agent defaults, got %q/%q", updated.DefaultAgentName, updated.DefaultAgentMode)
+	}
+}

@@ -73,6 +73,7 @@ func (s *Server) Router() http.Handler {
 		r.With(s.rateLimit(s.expensivePolicy("tasks:auto-schedule"))).Post("/{projectID}/tasks/auto-schedule", s.handleAutoScheduleTasks)
 		r.With(s.rateLimit(s.expensivePolicy("projects:advance"))).Post("/{projectID}/advance", s.handleAdvanceProject)
 		r.Get("/{projectID}/change-batches", s.handleListChangeBatches)
+		r.Get("/{projectID}/agent-bundle", s.handleGetProjectAgentBundle)
 		r.With(s.rateLimit(s.mutationPolicy("change-batches:create"))).Post("/{projectID}/change-batches", s.handleCreateChangeBatch)
 		r.Get("/{projectID}/memories", s.handleListMemories)
 		r.With(s.rateLimit(s.mutationPolicy("memories:create"))).Post("/{projectID}/memories", s.handleCreateMemory)
@@ -215,6 +216,8 @@ type createProjectRequest struct {
 	DefaultFrontend           string `json:"default_frontend"`
 	DefaultBackend            string `json:"default_backend"`
 	DefaultDomain             string `json:"default_domain"`
+	DefaultAgentName          string `json:"default_agent_name"`
+	DefaultAgentMode          string `json:"default_agent_mode"`
 	DefaultContextMode        string `json:"default_context_mode"`
 	DefaultContextTokenBudget int    `json:"default_context_token_budget"`
 	DefaultContextMaxItems    int    `json:"default_context_max_items"`
@@ -232,7 +235,7 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, errors.New("name is required"))
 		return
 	}
-	project, err := s.store.CreateProject(r.Context(), store.Project{
+	projectPayload := store.Project{
 		Name:                      strings.TrimSpace(req.Name),
 		Description:               strings.TrimSpace(req.Description),
 		RepoPath:                  strings.TrimSpace(req.RepoPath),
@@ -241,12 +244,19 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		DefaultFrontend:           strings.TrimSpace(req.DefaultFrontend),
 		DefaultBackend:            strings.TrimSpace(req.DefaultBackend),
 		DefaultDomain:             strings.TrimSpace(req.DefaultDomain),
+		DefaultAgentName:          strings.TrimSpace(req.DefaultAgentName),
+		DefaultAgentMode:          strings.TrimSpace(req.DefaultAgentMode),
 		DefaultContextMode:        strings.TrimSpace(req.DefaultContextMode),
 		DefaultContextTokenBudget: req.DefaultContextTokenBudget,
 		DefaultContextMaxItems:    req.DefaultContextMaxItems,
 		DefaultContextDynamic:     valueOrDefault(req.DefaultContextDynamic, true),
 		DefaultMemoryWriteback:    valueOrDefault(req.DefaultMemoryWriteback, true),
-	})
+	}
+	if err := s.validateProjectAgentDefaults(projectPayload); err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	project, err := s.store.CreateProject(r.Context(), projectPayload)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
@@ -284,25 +294,37 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
-	project, err := s.store.UpdateProjectWithDefaults(
-		r.Context(),
-		projectID,
-		store.Project{
-			Name:                      strings.TrimSpace(req.Name),
-			Description:               strings.TrimSpace(req.Description),
-			RepoPath:                  strings.TrimSpace(req.RepoPath),
-			Status:                    strings.TrimSpace(req.Status),
-			DefaultPlatform:           strings.TrimSpace(req.DefaultPlatform),
-			DefaultFrontend:           strings.TrimSpace(req.DefaultFrontend),
-			DefaultBackend:            strings.TrimSpace(req.DefaultBackend),
-			DefaultDomain:             strings.TrimSpace(req.DefaultDomain),
-			DefaultContextMode:        strings.TrimSpace(req.DefaultContextMode),
-			DefaultContextTokenBudget: req.DefaultContextTokenBudget,
-			DefaultContextMaxItems:    req.DefaultContextMaxItems,
-			DefaultContextDynamic:     valueOrDefault(req.DefaultContextDynamic, existing.DefaultContextDynamic),
-			DefaultMemoryWriteback:    valueOrDefault(req.DefaultMemoryWriteback, existing.DefaultMemoryWriteback),
-		},
-	)
+	projectPatch := store.Project{
+		Name:                      strings.TrimSpace(req.Name),
+		Description:               strings.TrimSpace(req.Description),
+		RepoPath:                  strings.TrimSpace(req.RepoPath),
+		Status:                    strings.TrimSpace(req.Status),
+		DefaultPlatform:           strings.TrimSpace(req.DefaultPlatform),
+		DefaultFrontend:           strings.TrimSpace(req.DefaultFrontend),
+		DefaultBackend:            strings.TrimSpace(req.DefaultBackend),
+		DefaultDomain:             strings.TrimSpace(req.DefaultDomain),
+		DefaultAgentName:          strings.TrimSpace(req.DefaultAgentName),
+		DefaultAgentMode:          strings.TrimSpace(req.DefaultAgentMode),
+		DefaultContextMode:        strings.TrimSpace(req.DefaultContextMode),
+		DefaultContextTokenBudget: req.DefaultContextTokenBudget,
+		DefaultContextMaxItems:    req.DefaultContextMaxItems,
+		DefaultContextDynamic:     valueOrDefault(req.DefaultContextDynamic, existing.DefaultContextDynamic),
+		DefaultMemoryWriteback:    valueOrDefault(req.DefaultMemoryWriteback, existing.DefaultMemoryWriteback),
+	}
+	if strings.TrimSpace(projectPatch.Name) == "" {
+		projectPatch.Name = existing.Name
+	}
+	if strings.TrimSpace(projectPatch.DefaultAgentName) == "" {
+		projectPatch.DefaultAgentName = existing.DefaultAgentName
+	}
+	if strings.TrimSpace(projectPatch.DefaultAgentMode) == "" {
+		projectPatch.DefaultAgentMode = existing.DefaultAgentMode
+	}
+	if err := s.validateProjectAgentDefaults(projectPatch); err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	project, err := s.store.UpdateProjectWithDefaults(r.Context(), projectID, projectPatch)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			respondError(w, http.StatusNotFound, err)
@@ -556,17 +578,26 @@ func (s *Server) handleAdvanceProject(w http.ResponseWriter, r *http.Request) {
 	if frontend == "" {
 		frontend = strings.TrimSpace(project.DefaultFrontend)
 	}
-	backend := strings.TrimSpace(req.Backend)
-	if backend == "" {
-		backend = strings.TrimSpace(project.DefaultBackend)
+	backendValue := strings.TrimSpace(req.Backend)
+	if backendValue == "" {
+		backendValue = strings.TrimSpace(project.DefaultBackend)
 	}
 
 	projectDir := s.resolveProjectDirForAdvance(r.Context(), projectID, project.RepoPath)
+	agentName, agentMode, selectionErr := s.resolveProjectAgentSelection(r, project, projectDir, project.DefaultAgentName, project.DefaultAgentMode)
+	if selectionErr != nil {
+		respondError(w, http.StatusBadRequest, selectionErr)
+		return
+	}
 	startReq := pipeline.StartRequest{
 		ProjectID:     projectID,
 		ChangeBatchID: changeBatch.ID,
 		Prompt:        prompt,
 		Simulate:      false,
+		Agent: pipeline.AgentOptions{
+			Name: agentName,
+			Mode: agentMode,
+		},
 		Context: pipeline.ContextOptions{
 			Mode:            pipeline.ContextMode(project.DefaultContextMode),
 			Query:           strings.TrimSpace(req.Goal),
@@ -585,7 +616,7 @@ func (s *Server) handleAdvanceProject(w http.ResponseWriter, r *http.Request) {
 			ProjectDir: projectDir,
 			Platform:   platform,
 			Frontend:   frontend,
-			Backend:    backend,
+			Backend:    backendValue,
 			Domain:     firstNonEmpty(strings.TrimSpace(req.Domain), strings.TrimSpace(project.DefaultDomain)),
 		},
 	}
@@ -787,6 +818,8 @@ type startPipelineRequest struct {
 	ContextMaxItems    int      `json:"context_max_items"`
 	ContextDynamic     *bool    `json:"context_dynamic"`
 	MemoryWriteback    *bool    `json:"memory_writeback"`
+	AgentName          string   `json:"agent_name"`
+	AgentMode          string   `json:"agent_mode"`
 }
 
 func (s *Server) handleStartPipeline(w http.ResponseWriter, r *http.Request) {
@@ -848,6 +881,13 @@ func (s *Server) handleStartPipeline(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	effectiveProjectDir := firstNonEmpty(strings.TrimSpace(req.ProjectDir), strings.TrimSpace(project.RepoPath))
+	agentName, agentMode, selectionErr := s.resolveProjectAgentSelection(r, project, effectiveProjectDir, req.AgentName, req.AgentMode)
+	if selectionErr != nil {
+		respondError(w, http.StatusBadRequest, selectionErr)
+		return
+	}
+
 	startReq := pipeline.StartRequest{
 		ProjectID:     req.ProjectID,
 		ChangeBatchID: strings.TrimSpace(req.ChangeBatchID),
@@ -856,6 +896,10 @@ func (s *Server) handleStartPipeline(w http.ResponseWriter, r *http.Request) {
 		LLM: pipeline.LLMOptions{
 			EnhancedLoop:     req.LLMEnhancedLoop,
 			MultimodalAssets: compactStrings(req.MultimodalAssets),
+		},
+		Agent: pipeline.AgentOptions{
+			Name: agentName,
+			Mode: agentMode,
 		},
 		Context: pipeline.ContextOptions{
 			Mode:            contextMode,
@@ -872,7 +916,7 @@ func (s *Server) handleStartPipeline(w http.ResponseWriter, r *http.Request) {
 		},
 		Options: pipeline.RunRequest{
 			Prompt:     req.Prompt,
-			ProjectDir: strings.TrimSpace(req.ProjectDir),
+			ProjectDir: effectiveProjectDir,
 			Platform:   firstNonEmpty(strings.TrimSpace(req.Platform), strings.TrimSpace(project.DefaultPlatform)),
 			Frontend:   firstNonEmpty(strings.TrimSpace(req.Frontend), strings.TrimSpace(project.DefaultFrontend)),
 			Backend:    firstNonEmpty(strings.TrimSpace(req.Backend), strings.TrimSpace(project.DefaultBackend)),
@@ -914,6 +958,13 @@ func (s *Server) handleRetryPipeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	retryAgentName := ""
+	retryAgentMode := ""
+	if previousAgentRun, agentErr := s.store.GetAgentRunByPipelineRun(r.Context(), runID); agentErr == nil {
+		retryAgentName = previousAgentRun.AgentName
+		retryAgentMode = previousAgentRun.ModeName
+	}
+
 	startReq := pipeline.StartRequest{
 		ProjectID:     previousRun.ProjectID,
 		ChangeBatchID: previousRun.ChangeBatchID,
@@ -923,6 +974,10 @@ func (s *Server) handleRetryPipeline(w http.ResponseWriter, r *http.Request) {
 		LLM: pipeline.LLMOptions{
 			EnhancedLoop:     previousRun.LLMEnhancedLoop,
 			MultimodalAssets: compactStrings(previousRun.MultimodalAssets),
+		},
+		Agent: pipeline.AgentOptions{
+			Name: retryAgentName,
+			Mode: retryAgentMode,
 		},
 		Context: pipeline.ContextOptions{
 			Mode:            contextMode,
