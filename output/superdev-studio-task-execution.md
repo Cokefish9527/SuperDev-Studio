@@ -1,8 +1,8 @@
 # Spec 任务执行报告
 
-- Change: `eino-agent-runtime-foundation`
-- 总任务: 14
-- 已完成: 14
+- Change: `context-hub-library-ux`
+- 总任务: 9
+- 已完成: 9
 - 未完成: 0
 
 ## 自动修复记录

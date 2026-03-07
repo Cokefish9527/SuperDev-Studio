@@ -12,15 +12,19 @@ import {
   message,
 } from 'antd';
 import dayjs from 'dayjs';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { apiClient } from '../api/client';
 import type { KnowledgeChunk, KnowledgeDocument } from '../types';
 import { useProjectState } from '../state/project-context';
+
+const searchPageSize = 4;
+const knowledgeSearchLimit = 8;
 
 export default function KnowledgePage() {
   const { activeProjectId } = useProjectState();
   const [form] = Form.useForm();
   const [searchQuery, setSearchQuery] = useState('');
+  const [resultPage, setResultPage] = useState(1);
   const queryClient = useQueryClient();
 
   const docsQuery = useQuery({
@@ -31,7 +35,7 @@ export default function KnowledgePage() {
 
   const searchResults = useQuery({
     queryKey: ['knowledge-search', activeProjectId, searchQuery],
-    queryFn: () => apiClient.searchKnowledge(activeProjectId, searchQuery),
+    queryFn: () => apiClient.searchKnowledge(activeProjectId, searchQuery, knowledgeSearchLimit),
     enabled: !!activeProjectId && !!searchQuery,
   });
 
@@ -45,6 +49,18 @@ export default function KnowledgePage() {
     },
     onError: (error: Error) => message.error(error.message),
   });
+
+  const resultItems = searchResults.data ?? [];
+  const totalPages = Math.max(1, Math.ceil(resultItems.length / searchPageSize));
+  const currentPage = Math.min(resultPage, totalPages);
+  const visibleResults = useMemo(
+    () => resultItems.slice((currentPage - 1) * searchPageSize, currentPage * searchPageSize),
+    [currentPage, resultItems],
+  );
+
+  useEffect(() => {
+    setResultPage(1);
+  }, [searchQuery]);
 
   const columns = [
     { title: '标题', dataIndex: 'title', key: 'title' },
@@ -60,12 +76,12 @@ export default function KnowledgePage() {
   return (
     <Space orientation="vertical" size="large" style={{ width: '100%' }}>
       <Typography.Title level={2} style={{ margin: 0, fontFamily: 'var(--heading-font)' }}>
-        知识库管理
+        {'知识库管理'}
       </Typography.Title>
 
-      <Card title="导入文档">
+      <Card title={'导入文档'}>
         {!activeProjectId ? (
-          <Empty description="请先选择项目" />
+          <Empty description={'请先选择项目'} />
         ) : (
           <Form
             form={form}
@@ -73,63 +89,111 @@ export default function KnowledgePage() {
             initialValues={{ chunk_size: 500 }}
             onFinish={(values) => createDoc.mutate(values)}
           >
-            <Form.Item name="title" label="文档标题" rules={[{ required: true }]}> 
-              <Input placeholder="产品设计规范 v1" />
+            <Form.Item name="title" label={'文档标题'} rules={[{ required: true }]}>
+              <Input placeholder={'产品设计规范 v1'} />
             </Form.Item>
-            <Form.Item name="source" label="来源">
+            <Form.Item name="source" label={'来源'}>
               <Input placeholder="Confluence / URL / Meeting Notes" />
             </Form.Item>
-            <Form.Item name="content" label="文档正文" rules={[{ required: true }]}> 
+            <Form.Item name="content" label={'文档正文'} rules={[{ required: true }]}>
               <Input.TextArea rows={8} />
             </Form.Item>
-            <Form.Item name="chunk_size" label="切片大小（字符）">
+            <Form.Item name="chunk_size" label={'切片大小（字符）'}>
               <InputNumber min={100} max={2000} step={50} style={{ width: 200 }} />
             </Form.Item>
             <Button type="primary" htmlType="submit" loading={createDoc.isPending}>
-              入库并切片
+              {'入库并切片'}
             </Button>
           </Form>
         )}
       </Card>
 
-      <Card title="知识检索">
+      <Card
+        title={'知识检索'}
+        extra={
+          resultItems.length > 0 ? (
+            <Space wrap>
+              <Typography.Text type="secondary" data-testid="knowledge-hit-count">
+                {'共'} {resultItems.length} {'条'}
+              </Typography.Text>
+              <Button
+                data-testid="knowledge-back-top"
+                size="small"
+                onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+              >
+                {'回到顶部'}
+              </Button>
+            </Space>
+          ) : null
+        }
+      >
         {!activeProjectId ? (
-          <Empty description="请先选择项目" />
+          <Empty description={'请先选择项目'} />
         ) : (
           <Space orientation="vertical" style={{ width: '100%' }}>
-            <Input.Search
-              allowClear
-              placeholder="输入关键词检索知识库"
-              onSearch={(value) => setSearchQuery(value.trim())}
-              enterButton="检索"
-            />
+            <div data-testid="knowledge-search-box">
+              <Input.Search
+                allowClear
+                placeholder={'输入关键词检索知识库'}
+                onSearch={(value) => setSearchQuery(value.trim())}
+                enterButton={'检索'}
+              />
+            </div>
             <Card loading={searchResults.isLoading}>
-              {searchResults.data && searchResults.data.length > 0 ? (
-                <Space orientation="vertical" style={{ width: '100%' }}>
-                  {searchResults.data.map((item: KnowledgeChunk) => (
+              {resultItems.length > 0 ? (
+                <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+                  <Typography.Text type="secondary" data-testid="knowledge-summary">
+                    {'当前显示'} {(currentPage - 1) * searchPageSize + 1}-
+                    {Math.min(currentPage * searchPageSize, resultItems.length)} / {resultItems.length}
+                  </Typography.Text>
+                  {visibleResults.map((item: KnowledgeChunk) => (
                     <Card key={item.id} size="small">
                       <Typography.Text strong>
-                        文档 {item.document_id} / chunk #{item.chunk_index}
+                        {'文档'} {item.document_id} / chunk #{item.chunk_index}
                       </Typography.Text>
                       <Typography.Paragraph style={{ marginBottom: 0 }}>{item.content}</Typography.Paragraph>
                     </Card>
                   ))}
+                  {totalPages > 1 ? (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                      <Button
+                        data-testid="knowledge-prev-page"
+                        size="small"
+                        onClick={() => setResultPage((value) => Math.max(1, value - 1))}
+                        disabled={currentPage === 1}
+                      >
+                        {'上一页'}
+                      </Button>
+                      <Typography.Text type="secondary">
+                        {'第'} {currentPage} / {totalPages} {'页'}
+                      </Typography.Text>
+                      <Button
+                        data-testid="knowledge-next-page"
+                        size="small"
+                        onClick={() => setResultPage((value) => Math.min(totalPages, value + 1))}
+                        disabled={currentPage === totalPages}
+                      >
+                        {'下一页'}
+                      </Button>
+                    </div>
+                  ) : null}
                 </Space>
               ) : (
-                <Empty description="暂无结果" />
+                <Empty description={searchQuery ? '暂无匹配结果' : '请输入关键词开始检索'} />
               )}
             </Card>
           </Space>
         )}
       </Card>
 
-      <Card title="文档列表">
+      <Card title={'文档列表'}>
         <Table<KnowledgeDocument>
           rowKey="id"
           columns={columns}
           dataSource={docsQuery.data ?? []}
           loading={docsQuery.isLoading}
           pagination={{ pageSize: 6 }}
+          scroll={{ x: 880 }}
         />
       </Card>
     </Space>
