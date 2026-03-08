@@ -391,6 +391,7 @@ func (m *Manager) runOneClickLifecycle(ctx context.Context, runID string, req St
 	}
 	lifecyclePrompt := resolveLifecyclePrompt(req)
 	resolvedProjectName := ""
+	agentSession := m.bootstrapStepAgent(ctx, runID, req)
 
 	_, _ = m.store.AppendRunEvent(ctx, store.RunEvent{
 		RunID:   runID,
@@ -399,13 +400,17 @@ func (m *Manager) runOneClickLifecycle(ctx context.Context, runID string, req St
 		Message: "One-click full lifecycle started (design -> iterate -> test -> acceptance -> release)",
 	})
 
-	designLines, err := m.runCommandStageWithLines(
+	designPlan := m.planStepAgent(ctx, agentSession, req, "agent-plan-fullcycle-design", "Plan full-cycle design stage", lifecyclePrompt, req.Prompt, map[string]any{"phase": "design"})
+	designLines, err := m.runAgentCommandStageWithLines(
 		ctx,
 		runID,
-		"lifecycle-design",
 		req.Options,
+		"lifecycle-design",
+		"run_superdev_pipeline",
 		buildPipelineCommandArgs(req.Options, lifecyclePrompt, true, true, true),
 		15,
+		agentSession,
+		designPlan,
 	)
 	if err != nil {
 		m.failRun(ctx, runID, req, "lifecycle-design", err, phasePacks)
@@ -447,15 +452,19 @@ func (m *Manager) runOneClickLifecycle(ctx context.Context, runID string, req St
 
 		iterationPrompt := lifecyclePrompt
 		if strings.TrimSpace(guidance) != "" {
-			iterationPrompt = strings.TrimSpace(iterationPrompt + "\n\n迭代修复目标:\n" + guidance)
+			iterationPrompt = strings.TrimSpace(iterationPrompt + "\n\n??????:\n" + guidance)
 		}
-		iterationLines, err := m.runCommandStageWithLines(
+		iterationPlan := m.planStepAgent(ctx, agentSession, req, fmt.Sprintf("agent-plan-fullcycle-iteration-%d", idx), "Plan full-cycle iteration", iterationPrompt, req.Prompt, map[string]any{"phase": "iteration", "iteration": idx})
+		iterationLines, err := m.runAgentCommandStageWithLines(
 			ctx,
 			runID,
-			iterationStage,
 			req.Options,
+			iterationStage,
+			"run_superdev_pipeline",
 			buildPipelineCommandArgs(req.Options, iterationPrompt, true, true, false),
 			progress,
+			agentSession,
+			iterationPlan,
 		)
 		if err != nil {
 			m.failRun(ctx, runID, req, iterationStage, err, phasePacks)
@@ -466,13 +475,17 @@ func (m *Manager) runOneClickLifecycle(ctx context.Context, runID string, req St
 		}
 		m.syncSuperDevProjectName(ctx, runID, req.Options, resolvedProjectName)
 
-		qualityLines, qualityErr := m.runCommandStageWithLines(
+		qualityPlan := m.planStepAgent(ctx, agentSession, req, fmt.Sprintf("agent-plan-fullcycle-quality-%d", idx), "Run full-cycle quality check", req.Prompt, changeID, map[string]any{"phase": "quality", "iteration": idx})
+		qualityLines, qualityErr := m.runAgentCommandStageWithLines(
 			ctx,
 			runID,
-			fmt.Sprintf("lifecycle-quality-%d", idx),
 			req.Options,
+			fmt.Sprintf("lifecycle-quality-%d", idx),
+			"run_superdev_quality",
 			[]string{"quality", "--type", "all"},
 			progress+5,
+			agentSession,
+			qualityPlan,
 		)
 		lastQualitySummary = summarizeQualityOutput(qualityLines)
 		var qualityDecision string
@@ -483,6 +496,16 @@ func (m *Manager) runOneClickLifecycle(ctx context.Context, runID string, req St
 			qualityErr,
 			qualityLines,
 		)
+		qualityAdvance := qualityPassed
+		qualityEvaluation := m.evaluateStepAgent(ctx, agentSession, req, fmt.Sprintf("agent-evaluate-fullcycle-quality-%d", idx), "Evaluate full-cycle quality gate", fmt.Sprintf("full-cycle iteration %d", idx), lastQualitySummary, idx, map[string]any{
+			"phase":            "full_cycle_quality",
+			"iteration":        idx,
+			"quality_passed":   qualityPassed,
+			"quality_decision": qualityDecision,
+		})
+		if qualityEvaluation != nil && !agentVerdictAllowsAdvance(qualityEvaluation.Verdict) {
+			qualityAdvance = false
+		}
 		if strings.TrimSpace(qualityDecision) != "" {
 			_, _ = m.store.AppendRunEvent(ctx, store.RunEvent{
 				RunID:   runID,
@@ -492,15 +515,17 @@ func (m *Manager) runOneClickLifecycle(ctx context.Context, runID string, req St
 			})
 		}
 
-		if qualityPassed {
+		if qualityAdvance {
 			_, _ = m.store.AppendRunEvent(ctx, store.RunEvent{
 				RunID:   runID,
 				Stage:   "lifecycle-quality",
 				Status:  "completed",
 				Message: fmt.Sprintf("Quality gate passed on iteration %d", idx),
 			})
+			qualityPassed = true
 			break
 		}
+		qualityPassed = false
 		if qualityErr != nil {
 			_, _ = m.store.AppendRunEvent(ctx, store.RunEvent{
 				RunID:   runID,
@@ -539,25 +564,37 @@ func (m *Manager) runOneClickLifecycle(ctx context.Context, runID string, req St
 	})
 	_ = m.store.UpdatePipelineRun(ctx, runID, "running", "lifecycle-acceptance", 80, nil, nil)
 
-	if err := m.runCommandStage(
+	releasePlan := m.planStepAgent(ctx, agentSession, req, "agent-plan-fullcycle-release", "Plan full-cycle release stage", req.Prompt, changeID, map[string]any{"phase": "release", "quality_summary": lastQualitySummary})
+	if m.requiresToolApproval(agentSession, highRiskDeployToolName) {
+		m.pauseFullCycleForToolApproval(ctx, runID, req, 88, agentSession, releasePlan, highRiskDeployToolName, []string{"deploy", "--docker", "--cicd", "all"})
+		return
+	}
+	if err := m.runAgentCommandStage(
 		ctx,
 		runID,
-		"lifecycle-release",
 		req.Options,
+		"lifecycle-release",
+		highRiskDeployToolName,
 		[]string{"deploy", "--docker", "--cicd", "all"},
 		90,
+		agentSession,
+		releasePlan,
 	); err != nil {
 		m.failRun(ctx, runID, req, "lifecycle-release", err, phasePacks)
 		return
 	}
 
-	if err := m.runCommandStage(
+	previewPlan := m.planStepAgent(ctx, agentSession, req, "agent-plan-fullcycle-preview", "Prepare preview artifact", req.Prompt, changeID, map[string]any{"phase": "preview"})
+	if err := m.runAgentCommandStage(
 		ctx,
 		runID,
-		"lifecycle-preview",
 		req.Options,
+		"lifecycle-preview",
+		"run_superdev_preview",
 		[]string{"preview", "--output", "output/preview.html"},
 		95,
+		agentSession,
+		previewPlan,
 	); err != nil {
 		m.failRun(ctx, runID, req, "lifecycle-preview", err, phasePacks)
 		return
@@ -565,6 +602,9 @@ func (m *Manager) runOneClickLifecycle(ctx context.Context, runID string, req St
 
 	m.maybeGenerateReflectionArtifact(ctx, runID, req, changeID, lastQualitySummary, "completed", "")
 	m.writebackRunMemory(ctx, req, runID, "completed", "done", "", phasePacks)
+	if agentSession != nil {
+		m.finishStepAgent(ctx, agentSession, "done", "One-click lifecycle finished")
+	}
 	finished := time.Now().UTC()
 	_ = m.store.UpdatePipelineRun(ctx, runID, "completed", "done", 100, nil, &finished)
 	m.touchChangeBatch(ctx, req.ChangeBatchID, "completed", runID, "")

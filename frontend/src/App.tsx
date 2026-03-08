@@ -13,7 +13,7 @@ const ContextHubPage = lazy(() => import('./pages/ContextHubPage'));
 function PageFallback() {
   return (
     <div style={{ minHeight: 240, display: 'grid', placeItems: 'center' }}>
-      <Spin size="large" tip="页面加载中" />
+      <Spin size="large" description="页面加载中" />
     </div>
   );
 }

@@ -71,6 +71,9 @@ const STAGE_FALLBACK: PipelineStage[] = [
   { key: 'rethink', title: '再构思', status: 'pending', artifacts: [] },
 ];
 
+const FULL_CYCLE_RELEASE_APPROVAL_STAGE = 'lifecycle-release-approval';
+const FULL_CYCLE_DEPLOY_TOOL = 'run_superdev_deploy';
+
 export default function PipelinePage() {
   const { activeProjectId, activeChangeBatchId } = useProjectState();
   const queryClient = useQueryClient();
@@ -100,6 +103,7 @@ export default function PipelinePage() {
     queryKey: ['project-agent-bundle', activeProjectId],
     queryFn: () => apiClient.getProjectAgentBundle(activeProjectId),
     enabled: !!activeProjectId,
+    retry: false,
   });
   const changeBatchesQuery = useQuery({
     queryKey: ['change-batches', activeProjectId],
@@ -151,7 +155,7 @@ export default function PipelinePage() {
     },
   });
 
-  const agentEnabled = Boolean(selectedRunId && runQuery.data?.step_by_step);
+  const agentEnabled = Boolean(selectedRunId && (runQuery.data?.step_by_step || runQuery.data?.full_cycle));
   const agentRunQuery = useQuery({
     queryKey: ['run-agent', selectedRunId],
     queryFn: () => apiClient.getRunAgent(selectedRunId),
@@ -237,13 +241,38 @@ export default function PipelinePage() {
       void queryClient.invalidateQueries({ queryKey: ['run', run.id] });
       void queryClient.invalidateQueries({ queryKey: ['run-events', run.id] });
       void queryClient.invalidateQueries({ queryKey: ['run-completion', run.id] });
+      void queryClient.invalidateQueries({ queryKey: ['run-agent', run.id] });
+      void queryClient.invalidateQueries({ queryKey: ['run-agent-tool-calls', run.id] });
+      void queryClient.invalidateQueries({ queryKey: ['run-agent-evaluations', run.id] });
     },
     onError: (error: Error) => message.error(error.message || '恢复失败'),
+  });
+  const approveToolMutation = useMutation({
+    mutationFn: ({ runId, toolName }: { runId: string; toolName?: string }) => apiClient.approvePipelineTool(runId, toolName),
+    onSuccess: (run) => {
+      message.success('已确认高风险动作，继续执行');
+      setManualSelectedRunId(run.id);
+      setSelectedArtifactPath('');
+      void queryClient.invalidateQueries({ queryKey: ['runs', activeProjectId] });
+      void queryClient.invalidateQueries({ queryKey: ['run', run.id] });
+      void queryClient.invalidateQueries({ queryKey: ['run-events', run.id] });
+      void queryClient.invalidateQueries({ queryKey: ['run-completion', run.id] });
+      void queryClient.invalidateQueries({ queryKey: ['run-agent', run.id] });
+      void queryClient.invalidateQueries({ queryKey: ['run-agent-tool-calls', run.id] });
+      void queryClient.invalidateQueries({ queryKey: ['run-agent-evaluations', run.id] });
+    },
+    onError: (error: Error) => message.error(error.message || '确认失败'),
   });
 
   const completionData = completionQuery.data as PipelineCompletion | undefined;
   const selectedRun = runQuery.data as PipelineRun | undefined;
   const latestAgentEvaluation = agentRunQuery.data?.latest_evaluation ?? agentEvaluationsQuery.data?.at(-1);
+  const pendingApprovalToolCall = findPendingApprovalToolCall(
+    agentToolCallsQuery.data ?? [],
+    selectedRun,
+    latestAgentEvaluation,
+    agentRunQuery.data,
+  );
 
   const openRunDetails = (tabKey: string = 'overview') => {
     setDetailsTabKey(tabKey);
@@ -267,6 +296,18 @@ export default function PipelinePage() {
       llm_enhanced_loop: true,
     });
   }, [form, projectQuery.data]);
+
+  useEffect(() => {
+    if (!fullCycle) {
+      if (stepByStep && form.getFieldValue('agent_mode') === 'full_cycle') {
+        form.setFieldValue('agent_mode', projectQuery.data?.default_agent_mode || 'step_by_step');
+      }
+      return;
+    }
+    if (form.getFieldValue('agent_mode') !== 'full_cycle') {
+      form.setFieldValue('agent_mode', 'full_cycle');
+    }
+  }, [form, fullCycle, stepByStep, projectQuery.data]);
 
   const stageBoard = useMemo(() => buildStageBoard(completionData), [completionData]);
   const allArtifacts = useMemo(() => completionData?.artifacts ?? [], [completionData]);
@@ -296,11 +337,43 @@ export default function PipelinePage() {
 
   const runColumns = useMemo<ColumnsType<PipelineRun>>(
     () => [
-      { title: '状态', dataIndex: 'status', key: 'status', width: 110, render: (value: string) => <Tag color={statusColor(value)}>{value}</Tag> },
-      { title: '阶段', dataIndex: 'stage', key: 'stage', width: 180 },
-      { title: '进度', dataIndex: 'progress', key: 'progress', width: 120, render: (value: number) => `${value}%` },
-      { title: '需求', dataIndex: 'prompt', key: 'prompt' },
-      { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 180, render: (value: string) => dayjs(value).format('YYYY-MM-DD HH:mm:ss') },
+      {
+        title: '状态',
+        dataIndex: 'status',
+        key: 'status',
+        width: 96,
+        render: (value: string) => <Tag color={statusColor(value)}>{value}</Tag>,
+      },
+      { title: '阶段', dataIndex: 'stage', key: 'stage', width: 120 },
+      { title: '进度', dataIndex: 'progress', key: 'progress', width: 96, render: (value: number) => `${value}%` },
+      {
+        title: '需求摘要',
+        dataIndex: 'prompt',
+        key: 'prompt',
+        render: (value: string) => (
+          <Typography.Paragraph
+            ellipsis={{ rows: 2, tooltip: value }}
+            style={{
+              marginBottom: 0,
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden',
+              lineHeight: 1.6,
+            }}
+          >
+            {value}
+          </Typography.Paragraph>
+        ),
+      },
+      {
+        title: '创建时间',
+        dataIndex: 'created_at',
+        key: 'created_at',
+        width: 168,
+        responsive: ['xxl'],
+        render: (value: string) => dayjs(value).format('MM-DD HH:mm'),
+      },
     ],
     [],
   );
@@ -426,21 +499,21 @@ export default function PipelinePage() {
                     </Form.Item>
                   ) : null}
 
-                  <Card size="small" title="step_by_step Agent Strategy" style={{ marginBottom: 16, borderRadius: 16 }}>
+                  <Card size="small" title="Agent Strategy" style={{ marginBottom: 16, borderRadius: 16 }}>
                     <Row gutter={12}>
                       <Col span={12}>
                         <Form.Item name="agent_name" label="Agent">
-                          <Select options={agentOptions} placeholder="delivery-agent" disabled={!stepByStep} />
+                          <Select options={agentOptions} placeholder="delivery-agent" disabled={!(stepByStep || fullCycle)} />
                         </Form.Item>
                       </Col>
                       <Col span={12}>
                         <Form.Item name="agent_mode" label="Agent Mode">
-                          <Select options={agentModeOptions} placeholder="step_by_step" disabled={!stepByStep} />
+                          <Select options={agentModeOptions} placeholder="full_cycle / step_by_step" disabled={!(stepByStep || fullCycle)} />
                         </Form.Item>
                       </Col>
                     </Row>
                     <Typography.Text type="secondary">
-                      Options come from the project `.studio-agent` bundle; AgentRun is created only when step_by_step is enabled.
+                      Options come from the project `.studio-agent` bundle; AgentRun is created when step_by_step or full_cycle is enabled.
                     </Typography.Text>
                   </Card>
 
@@ -537,33 +610,6 @@ export default function PipelinePage() {
                     {(completionData?.artifacts?.length || completionData?.preview_url) ? (
                       <Button onClick={() => openRunDetails('preview')}>{"查看产物预览"}</Button>
                     ) : null}
-                    {selectedRun.status === 'awaiting_human' ? (
-                      <Alert
-                        showIcon
-                        type="warning"
-                        style={{ marginBottom: 0, borderRadius: 14 }}
-                        message="需要人工接管"
-                        description={latestAgentEvaluation ? `${latestAgentEvaluation.reason}${latestAgentEvaluation.next_action ? `；建议动作：${latestAgentEvaluation.next_action}` : ''}` : 'Agent 已暂停，等待人工确认后继续。'}
-                      />
-                    ) : latestAgentEvaluation?.verdict === 'need_context' ? (
-                      <Alert
-                        showIcon
-                        type="info"
-                        style={{ marginBottom: 0, borderRadius: 14 }}
-                        message="Agent 曾请求补强上下文"
-                        description={`${latestAgentEvaluation.reason}${latestAgentEvaluation.next_action ? `；下一步：${latestAgentEvaluation.next_action}` : ''}`}
-                      />
-                    ) : null}
-                    {selectedRun.status === 'failed' ? (
-                      <Button danger onClick={() => retryMutation.mutate(selectedRun.id)} loading={retryMutation.isPending}>
-                        {"重试失败运行"}
-                      </Button>
-                    ) : null}
-                    {selectedRun.status === 'awaiting_human' ? (
-                      <Button type="primary" onClick={() => resumeMutation.mutate(selectedRun.id)} loading={resumeMutation.isPending}>
-                        {"人工确认后恢复"}
-                      </Button>
-                    ) : null}
                   </Space>
                 ) : null}
               >
@@ -579,11 +625,54 @@ export default function PipelinePage() {
                       {selectedRun.step_by_step ? <Tag color="blue">step-by-step</Tag> : null}
                       {selectedRun.simulate ? <Tag color="orange">simulate</Tag> : null}
                     </Space>
-                    <Typography.Text type="secondary" ellipsis={{ tooltip: selectedRun.prompt }}>
+                    <Typography.Paragraph type="secondary" ellipsis={{ rows: 2, tooltip: selectedRun.prompt }} style={{ marginBottom: 0 }}>
                       {selectedRun.prompt}
-                    </Typography.Text>
+                    </Typography.Paragraph>
+                    {(selectedRun.status === 'awaiting_human' || latestAgentEvaluation?.verdict === 'need_context') ? (
+                      <Alert
+                        showIcon
+                        type={selectedRun.status === 'awaiting_human' ? 'warning' : 'info'}
+                        style={{ marginBottom: 0, borderRadius: 14 }}
+                        title={selectedRun.status === 'awaiting_human'
+                          ? pendingApprovalToolCall
+                            ? '高风险动作待确认'
+                            : '需要人工接管'
+                          : 'Agent 曾请求补强上下文'}
+                        description={selectedRun.status === 'awaiting_human'
+                          ? pendingApprovalToolCall
+                            ? `${pendingApprovalToolCall.reason || '高风险 deploy 动作需要人工确认后继续。'}${pendingApprovalToolCall.risk_level ? `；风险级别：${pendingApprovalToolCall.risk_level}` : ''}`
+                            : latestAgentEvaluation
+                              ? `${latestAgentEvaluation.reason}${latestAgentEvaluation.next_action ? `；建议动作：${latestAgentEvaluation.next_action}` : ''}`
+                              : 'Agent 已暂停，等待人工确认后继续。'
+                          : `${latestAgentEvaluation?.reason ?? '本次运行曾请求补强上下文。'}${latestAgentEvaluation?.next_action ? `；下一步：${latestAgentEvaluation.next_action}` : ''}`}
+                      />
+                    ) : null}
+                    {(selectedRun.status === 'failed' || selectedRun.status === 'awaiting_human') ? (
+                      <Space wrap>
+                        {selectedRun.status === 'failed' ? (
+                          <Button danger onClick={() => retryMutation.mutate(selectedRun.id)} loading={retryMutation.isPending}>
+                            {"重试失败运行"}
+                          </Button>
+                        ) : null}
+                        {selectedRun.status === 'awaiting_human' ? (
+                          pendingApprovalToolCall ? (
+                            <Button
+                              type="primary"
+                              onClick={() => approveToolMutation.mutate({ runId: selectedRun.id, toolName: pendingApprovalToolCall.tool_name })}
+                              loading={approveToolMutation.isPending}
+                            >
+                              {"确认高风险动作并继续"}
+                            </Button>
+                          ) : (
+                            <Button type="primary" onClick={() => resumeMutation.mutate(selectedRun.id)} loading={resumeMutation.isPending}>
+                              {"人工确认后恢复"}
+                            </Button>
+                          )
+                        ) : null}
+                      </Space>
+                    ) : null}
                     <Progress percent={selectedRun.progress} strokeColor={{ from: '#0ea5e9', to: '#7c3aed' }} />
-                    <Descriptions size="small" column={2}>
+                    <Descriptions size="small" column={{ xs: 1, sm: 2 }}>
                       <Descriptions.Item label={"运行 ID"}>{selectedRun.id}</Descriptions.Item>
                       <Descriptions.Item label={"运行模式"}>{formatRunMode(selectedRun)}</Descriptions.Item>
                       <Descriptions.Item label={"更新时间"}>{dayjs(selectedRun.updated_at).format('YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
@@ -643,7 +732,7 @@ export default function PipelinePage() {
             toolCalls={agentToolCallsQuery.data ?? []}
             evidence={agentEvidenceQuery.data ?? []}
             evaluations={agentEvaluationsQuery.data ?? []}
-            visible={Boolean(runQuery.data?.step_by_step)}
+            visible={Boolean(runQuery.data?.step_by_step || runQuery.data?.full_cycle)}
           />
         }
         onRetry={selectedRun ? () => retryMutation.mutate(selectedRun.id) : undefined}
@@ -706,6 +795,63 @@ function normalizeContextMode(raw?: string): 'off' | 'auto' | 'manual' {
     default:
       return 'auto';
   }
+}
+
+type ToolApprovalState = {
+  tool_name: string;
+  status?: string;
+  risk_level?: string;
+  requires_confirmation?: boolean;
+  approved?: boolean;
+  reason?: string;
+};
+
+function parseToolApprovalState(call: AgentToolCall): ToolApprovalState | undefined {
+  try {
+    const payload = JSON.parse(call.response_json || '{}') as Omit<ToolApprovalState, 'tool_name'>;
+    if (!payload || typeof payload !== 'object') {
+      return undefined;
+    }
+    return {
+      tool_name: call.tool_name,
+      status: typeof payload.status === 'string' ? payload.status : undefined,
+      risk_level: typeof payload.risk_level === 'string' ? payload.risk_level : undefined,
+      requires_confirmation: typeof payload.requires_confirmation === 'boolean' ? payload.requires_confirmation : undefined,
+      approved: typeof payload.approved === 'boolean' ? payload.approved : undefined,
+      reason: typeof payload.reason === 'string' ? payload.reason : undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function findPendingApprovalToolCall(
+  toolCalls: AgentToolCall[],
+  run?: PipelineRun,
+  latestEvaluation?: AgentEvaluation,
+  agentRun?: PipelineRunAgent,
+) {
+  for (const call of [...toolCalls].reverse()) {
+    const state = parseToolApprovalState(call);
+    if (state?.requires_confirmation && !state.approved && state.status === 'awaiting_approval') {
+      return state;
+    }
+  }
+
+  const approvalStage = run?.stage || agentRun?.run?.current_node;
+  const awaitingHuman = run?.status === 'awaiting_human' || agentRun?.run?.status === 'awaiting_human';
+  if (awaitingHuman && approvalStage === FULL_CYCLE_RELEASE_APPROVAL_STAGE) {
+    return {
+      tool_name: FULL_CYCLE_DEPLOY_TOOL,
+      status: 'awaiting_approval',
+      risk_level: 'high',
+      requires_confirmation: true,
+      approved: false,
+      reason: latestEvaluation?.reason,
+    } satisfies ToolApprovalState;
+  }
+
+  return undefined;
 }
 
 function statusColor(status?: string) {
@@ -831,15 +977,21 @@ function AgentObservabilityCard({
         <div>
           <Typography.Text strong>最近工具调用</Typography.Text>
           <Space orientation="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
-            {toolCalls.slice(-3).map((call) => (
-              <div key={call.id} style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12 }}>
-                <Space wrap>
-                  <Tag color={call.success ? 'green' : 'red'}>{call.success ? 'success' : 'failed'}</Tag>
-                  <Typography.Text code>{call.tool_name}</Typography.Text>
-                  <Typography.Text type="secondary">{call.latency_ms} ms</Typography.Text>
-                </Space>
-              </div>
-            ))}
+            {toolCalls.slice(-3).map((call) => {
+              const approvalState = parseToolApprovalState(call);
+              return (
+                <div key={call.id} style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12 }}>
+                  <Space wrap>
+                    <Tag color={call.success ? 'green' : approvalState?.status === 'awaiting_approval' ? 'gold' : 'red'}>
+                      {call.success ? 'success' : approvalState?.status === 'awaiting_approval' ? 'awaiting_approval' : 'failed'}
+                    </Tag>
+                    <Typography.Text code>{call.tool_name}</Typography.Text>
+                    {approvalState?.risk_level ? <Tag color="magenta">risk:{approvalState.risk_level}</Tag> : null}
+                    <Typography.Text type="secondary">{call.latency_ms} ms</Typography.Text>
+                  </Space>
+                </div>
+              );
+            })}
           </Space>
         </div>
 

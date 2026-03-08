@@ -72,3 +72,17 @@ func TestBundleFindAgentAndMode(t *testing.T) {
 		t.Fatalf("expected step_by_step mode to be found")
 	}
 }
+
+func TestDefaultBundleIncludesFullCycleMode(t *testing.T) {
+	bundle := defaultBundle()
+	mode, ok := bundle.FindMode("full_cycle")
+	if !ok {
+		t.Fatalf("expected full_cycle mode to be found")
+	}
+	if !mode.AllowDeploy {
+		t.Fatalf("expected full_cycle mode to allow deploy")
+	}
+	if !mode.RequireApproval {
+		t.Fatalf("expected full_cycle mode to require approval")
+	}
+}

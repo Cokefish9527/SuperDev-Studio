@@ -11,6 +11,7 @@ const FULL_CYCLE_SWITCH = '一键全流程交付';
 const STEP_BY_STEP_SWITCH = '按 super-dev 原生步骤执行';
 const ITERATION_LABEL = '开发-单测-修复迭代次数';
 const RETRY_LABEL = '重试失败运行';
+const APPROVE_LABEL = '确认高风险动作并继续';
 const TAB_PREVIEW = '产物预览';
 const TAB_STAGES = '阶段产物';
 const TAB_EXECUTION = '执行轨迹';
@@ -36,6 +37,8 @@ vi.mock('../api/client', async (importOriginal) => {
       listRunAgentEvaluations: vi.fn(),
       startPipeline: vi.fn(),
       retryPipeline: vi.fn(),
+      resumePipeline: vi.fn(),
+      approvePipelineTool: vi.fn(),
     },
   };
 });
@@ -76,7 +79,7 @@ describe('PipelinePage', () => {
       default_agent_name: 'reviewer',
       default_agent_mode: 'review',
       agents: [{ name: 'reviewer', description: 'Review agent' }],
-      modes: [{ name: 'review', description: 'Review mode' }],
+      modes: [{ name: 'review', description: 'Review mode' }, { name: 'full_cycle', description: 'Full cycle mode' }, { name: 'step_by_step', description: 'Step mode' }],
     });
     vi.mocked(apiClient.listChangeBatches).mockResolvedValue([]);
     vi.mocked(apiClient.getRun).mockResolvedValue({
@@ -110,6 +113,27 @@ describe('PipelinePage', () => {
       status: 'queued',
       progress: 0,
       stage: 'queued',
+      created_at: '2026-03-05T00:00:00Z',
+      updated_at: '2026-03-05T00:00:00Z',
+    });
+    vi.mocked(apiClient.resumePipeline).mockResolvedValue({
+      id: 'run-resume',
+      project_id: 'project-1',
+      prompt: 'resume',
+      status: 'queued',
+      progress: 0,
+      stage: 'queued',
+      created_at: '2026-03-05T00:00:00Z',
+      updated_at: '2026-03-05T00:00:00Z',
+    });
+    vi.mocked(apiClient.approvePipelineTool).mockResolvedValue({
+      id: 'run-awaiting',
+      project_id: 'project-1',
+      prompt: 'approve',
+      status: 'running',
+      progress: 88,
+      stage: 'lifecycle-release',
+      full_cycle: true,
       created_at: '2026-03-05T00:00:00Z',
       updated_at: '2026-03-05T00:00:00Z',
     });
@@ -301,6 +325,93 @@ describe('PipelinePage', () => {
     await waitFor(() => {
       expect(apiClient.retryPipeline).toHaveBeenCalled();
       expect(vi.mocked(apiClient.retryPipeline).mock.calls[0][0]).toBe('run-failed');
+    });
+  }, 12000);
+
+  it('approves pending high-risk full-cycle action from summary', async () => {
+    vi.mocked(apiClient.listRuns).mockResolvedValue([
+      {
+        id: 'run-awaiting',
+        project_id: 'project-1',
+        prompt: 'full-cycle-awaiting-approval',
+        status: 'awaiting_human',
+        progress: 88,
+        stage: 'lifecycle-release-approval',
+        full_cycle: true,
+        created_at: '2026-03-05T00:00:00Z',
+        updated_at: '2026-03-05T00:00:00Z',
+      },
+    ]);
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      id: 'run-awaiting',
+      project_id: 'project-1',
+      prompt: 'full-cycle-awaiting-approval',
+      status: 'awaiting_human',
+      progress: 88,
+      stage: 'lifecycle-release-approval',
+      full_cycle: true,
+      created_at: '2026-03-05T00:00:00Z',
+      updated_at: '2026-03-05T00:00:00Z',
+    });
+    vi.mocked(apiClient.getRunAgent).mockResolvedValue({
+      run: {
+        id: 'agent-run-1',
+        pipeline_run_id: 'run-awaiting',
+        project_id: 'project-1',
+        change_batch_id: '',
+        agent_name: 'reviewer',
+        mode_name: 'full_cycle',
+        status: 'awaiting_human',
+        current_node: 'lifecycle-release-approval',
+        summary: 'Awaiting high-risk deploy approval',
+        created_at: '2026-03-05T00:00:00Z',
+        updated_at: '2026-03-05T00:00:00Z',
+      },
+      step_count: 3,
+      tool_call_count: 1,
+      evidence_count: 0,
+      evaluation_count: 1,
+      latest_evaluation: {
+        id: 'eval-1',
+        agent_step_id: 'step-1',
+        evaluation_type: 'tool_governance',
+        verdict: 'need_human',
+        reason: 'High-risk deploy action requires human confirmation before continuing.',
+        next_action: 'Confirm deploy and continue execution.',
+        created_at: '2026-03-05T00:00:00Z',
+      },
+    });
+    vi.mocked(apiClient.listRunAgentToolCalls).mockResolvedValue([
+      {
+        id: 'tool-1',
+        agent_step_id: 'step-1',
+        tool_name: 'run_superdev_deploy',
+        request_json: '{"stage":"lifecycle-release-approval","args":["deploy","--docker","--cicd","all"]}',
+        response_json: '{"status":"awaiting_approval","risk_level":"high","requires_confirmation":true,"approved":false,"reason":"High-risk deploy action requires human confirmation before continuing."}',
+        success: false,
+        latency_ms: 0,
+        created_at: '2026-03-05T00:00:00Z',
+      },
+    ]);
+
+    renderWithProviders(<PipelinePage />);
+
+    await waitFor(() => {
+      expect(apiClient.listRuns).toHaveBeenCalledWith('project-1');
+      expect(apiClient.getRun).toHaveBeenCalledWith('run-awaiting');
+    }, { timeout: 4000 });
+
+    await waitFor(() => {
+      expect(apiClient.listRunAgentToolCalls).toHaveBeenCalledWith('run-awaiting');
+    }, { timeout: 4000 });
+
+    const approveButton = await screen.findByRole('button', { name: APPROVE_LABEL }, { timeout: 4000 });
+    await userEvent.click(approveButton);
+
+    await waitFor(() => {
+      expect(apiClient.approvePipelineTool).toHaveBeenCalled();
+      expect(vi.mocked(apiClient.approvePipelineTool).mock.calls[0][0]).toBe('run-awaiting');
+      expect(vi.mocked(apiClient.approvePipelineTool).mock.calls[0][1]).toBe('run_superdev_deploy');
     });
   }, 12000);
 
@@ -525,5 +636,5 @@ describe('PipelinePage', () => {
       expect(within(dialog).getAllByText('PRD 文档').length).toBeGreaterThan(0);
       expect(within(dialog).getByRole('button', { name: PREVIEW_PAGE_LABEL })).toBeInTheDocument();
     });
-  });
+  }, 12000);
 });

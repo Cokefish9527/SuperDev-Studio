@@ -38,7 +38,23 @@ export const apiClient = {
   createProject: async (payload: Partial<Project>) => (await api.post<Project>('/api/projects', payload)).data,
   updateProject: async (id: string, payload: Partial<Project>) => (await api.put<Project>(`/api/projects/${id}`, payload)).data,
   deleteProject: async (id: string) => (await api.delete<{ status: string }>(`/api/projects/${id}`)).data,
-  getProjectAgentBundle: async (id: string) => (await api.get<ProjectAgentBundle>(`/api/projects/${id}/agent-bundle`)).data,
+  getProjectAgentBundle: async (id: string) => {
+    try {
+      return (await api.get<ProjectAgentBundle>(`/api/projects/${id}/agent-bundle`)).data;
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
+        return {
+          project_id: id,
+          project_dir: '',
+          default_agent_name: '',
+          default_agent_mode: '',
+          agents: [],
+          modes: [],
+        } satisfies ProjectAgentBundle;
+      }
+      throw error;
+    }
+  },
 
   listChangeBatches: async (projectId: string) =>
     unwrapItems<ChangeBatch>(api.get(`/api/projects/${projectId}/change-batches`)),
@@ -144,6 +160,8 @@ export const apiClient = {
     (await api.post<PipelineRun>(`/api/pipeline/runs/${runId}/retry`)).data,
   resumePipeline: async (runId: string) =>
     (await api.post<PipelineRun>(`/api/pipeline/runs/${runId}/resume`)).data,
+  approvePipelineTool: async (runId: string, toolName?: string) =>
+    (await api.post<PipelineRun>(`/api/pipeline/runs/${runId}/approve-tool`, toolName ? { tool_name: toolName } : {})).data,
   getRunCompletion: async (runId: string) =>
     (await api.get<PipelineCompletion>(`/api/pipeline/runs/${runId}/completion`)).data,
   getRun: async (runId: string) => (await api.get<PipelineRun>(`/api/pipeline/runs/${runId}`)).data,

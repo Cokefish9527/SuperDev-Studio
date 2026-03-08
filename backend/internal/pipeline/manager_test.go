@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"superdevstudio/internal/agentruntime"
 	"superdevstudio/internal/contextopt"
 	"superdevstudio/internal/store"
 )
@@ -27,6 +29,86 @@ type fakeAdvisor struct {
 	mu        sync.Mutex
 	calls     int
 	assetsLog [][]string
+}
+
+type scriptedPipelineAgentRuntime struct {
+	store *store.Store
+}
+
+func newScriptedPipelineAgentRuntime(s *store.Store) *scriptedPipelineAgentRuntime {
+	return &scriptedPipelineAgentRuntime{store: s}
+}
+
+func (r *scriptedPipelineAgentRuntime) StartRun(ctx context.Context, req agentruntime.StartRunRequest) (store.AgentRun, error) {
+	return r.store.CreateAgentRun(ctx, store.AgentRun{
+		PipelineRunID: req.PipelineRunID,
+		ProjectID:     req.ProjectID,
+		ChangeBatchID: req.ChangeBatchID,
+		AgentName:     firstNonEmpty(req.AgentName, "delivery-agent"),
+		ModeName:      firstNonEmpty(req.ModeName, "step_by_step"),
+		Status:        "running",
+		CurrentNode:   firstNonEmpty(req.CurrentNode, "bootstrap"),
+	})
+}
+
+func (r *scriptedPipelineAgentRuntime) GetRunByPipelineRun(ctx context.Context, pipelineRunID string) (store.AgentRun, error) {
+	return r.store.GetAgentRunByPipelineRun(ctx, pipelineRunID)
+}
+
+func (r *scriptedPipelineAgentRuntime) Plan(ctx context.Context, req agentruntime.PlanRequest) (agentruntime.PlanResult, error) {
+	step, err := r.store.CreateAgentStep(ctx, store.AgentStep{AgentRunID: req.AgentRunID, NodeName: req.NodeName, Title: req.Title, InputJSON: "{}", Status: "running"})
+	if err != nil {
+		return agentruntime.PlanResult{}, err
+	}
+	finished := time.Now().UTC()
+	if err := r.store.UpdateAgentStep(ctx, step.ID, "completed", `{"summary":"scripted plan"}`, "scripted plan", &finished); err != nil {
+		return agentruntime.PlanResult{}, err
+	}
+	step.Status = "completed"
+	step.OutputJSON = `{"summary":"scripted plan"}`
+	step.DecisionSummary = "scripted plan"
+	step.FinishedAt = &finished
+	_ = r.store.UpdateAgentRun(ctx, req.AgentRunID, "running", req.NodeName, "scripted plan", nil)
+	return agentruntime.PlanResult{Step: step, Summary: "scripted plan", SuggestedTool: firstNonEmpty(strings.Join(req.AllowedTools[:minLen(len(req.AllowedTools), 1)], ""), "run_superdev_pipeline"), NextAction: "continue"}, nil
+}
+
+func (r *scriptedPipelineAgentRuntime) Evaluate(ctx context.Context, req agentruntime.EvaluateRequest) (agentruntime.EvaluateResult, error) {
+	step, err := r.store.CreateAgentStep(ctx, store.AgentStep{AgentRunID: req.AgentRunID, NodeName: req.NodeName, Title: req.Title, InputJSON: "{}", Status: "running"})
+	if err != nil {
+		return agentruntime.EvaluateResult{}, err
+	}
+	record, err := r.store.CreateAgentEvaluation(ctx, store.AgentEvaluation{AgentStepID: step.ID, EvaluationType: "step-outcome", Verdict: "pass", Reason: "Evaluation passed.", NextAction: "Continue to the next step."})
+	if err != nil {
+		return agentruntime.EvaluateResult{}, err
+	}
+	finished := time.Now().UTC()
+	if err := r.store.UpdateAgentStep(ctx, step.ID, "completed", `{"verdict":"pass"}`, record.Reason, &finished); err != nil {
+		return agentruntime.EvaluateResult{}, err
+	}
+	step.Status = "completed"
+	step.OutputJSON = `{"verdict":"pass"}`
+	step.DecisionSummary = record.Reason
+	step.FinishedAt = &finished
+	_ = r.store.UpdateAgentRun(ctx, req.AgentRunID, "running", req.NodeName, record.Reason, nil)
+	return agentruntime.EvaluateResult{Step: step, Verdict: "pass", Reason: record.Reason, NextAction: record.NextAction, Evaluation: record, Raw: `{"verdict":"pass"}`}, nil
+}
+
+func (r *scriptedPipelineAgentRuntime) RecordToolCall(ctx context.Context, req agentruntime.ToolCallRequest) (store.AgentToolCall, error) {
+	requestJSON, _ := json.Marshal(req.Request)
+	responseJSON, _ := json.Marshal(req.Response)
+	return r.store.CreateAgentToolCall(ctx, store.AgentToolCall{AgentStepID: req.AgentStepID, ToolName: req.ToolName, RequestJSON: string(requestJSON), ResponseJSON: string(responseJSON), Success: req.Success, LatencyMS: int(req.Latency / time.Millisecond)})
+}
+
+func (r *scriptedPipelineAgentRuntime) FinishRun(ctx context.Context, runID, currentNode, summary string) error {
+	finished := time.Now().UTC()
+	return r.store.UpdateAgentRun(ctx, runID, "completed", currentNode, summary, &finished)
+}
+
+func minLen(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func (f *fakeAdvisor) Advise(_ context.Context, prompt string) (string, error) {
@@ -466,6 +548,120 @@ func TestManagerOneClickLifecycleCompletesAfterQualityRetry(t *testing.T) {
 	}
 	if configSyncCount == 0 {
 		t.Fatalf("expected lifecycle config sync command")
+	}
+}
+
+func TestManagerOneClickLifecycleWaitsForDeployApprovalAndCanContinue(t *testing.T) {
+	s := newPipelineTestStore(t)
+	ctx := context.Background()
+	project, err := s.CreateProject(ctx, store.Project{Name: "OneClickApproval"})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	projectDir := t.TempDir()
+	deployCount := 0
+	previewCount := 0
+	runner := &fakeRunner{
+		commandFn: func(req RunRequest, commandArgs []string) ([]string, error) {
+			if len(commandArgs) == 0 {
+				return nil, errors.New("empty command args")
+			}
+			switch commandArgs[0] {
+			case "pipeline":
+				return []string{"??: approval-project", "pipeline ok"}, nil
+			case "quality":
+				outputDir := filepath.Join(req.ProjectDir, "output")
+				if mkErr := os.MkdirAll(outputDir, 0o755); mkErr != nil {
+					return nil, mkErr
+				}
+				reportPath := filepath.Join(outputDir, "one-click-approval-quality-gate.md")
+				if writeErr := os.WriteFile(reportPath, []byte("quality ok"), 0o644); writeErr != nil {
+					return nil, writeErr
+				}
+				return []string{"quality passed"}, nil
+			case "deploy":
+				deployCount++
+				return []string{"deploy ok"}, nil
+			case "preview":
+				previewCount++
+				outputFile := filepath.Join(req.ProjectDir, "output", "preview.html")
+				if writeErr := os.WriteFile(outputFile, []byte("<html>preview</html>"), 0o644); writeErr != nil {
+					return nil, writeErr
+				}
+				return []string{"preview ok"}, nil
+			default:
+				return []string{"ok"}, nil
+			}
+		},
+	}
+	manager := NewManager(s, runner, contextopt.NewService(s))
+	manager.SetAgentRuntime(newScriptedPipelineAgentRuntime(s))
+
+	run, err := manager.Start(ctx, StartRequest{
+		ProjectID: project.ID,
+		Prompt:    "full cycle approval",
+		Simulate:  false,
+		Agent:     AgentOptions{Mode: "full_cycle"},
+		Lifecycle: LifecycleOptions{
+			OneClickDelivery: true,
+			IterationLimit:   2,
+		},
+		Options: RunRequest{
+			Prompt:     "full cycle approval",
+			ProjectDir: projectDir,
+			Platform:   "web",
+			Frontend:   "react",
+			Backend:    "go",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	paused := waitForRunCompletion(t, s, run.ID)
+	if paused.Status != "awaiting_human" {
+		t.Fatalf("expected awaiting_human, got %s", paused.Status)
+	}
+	if paused.Stage != fullCycleReleaseApprovalStage {
+		t.Fatalf("expected %s, got %s", fullCycleReleaseApprovalStage, paused.Stage)
+	}
+	if deployCount != 0 {
+		t.Fatalf("expected deploy not to run before approval, got %d", deployCount)
+	}
+	agentRun, err := s.GetAgentRunByPipelineRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get agent run: %v", err)
+	}
+	if agentRun.ModeName != "full_cycle" {
+		t.Fatalf("expected full_cycle mode, got %s", agentRun.ModeName)
+	}
+	toolCalls, err := s.ListAgentToolCalls(ctx, agentRun.ID)
+	if err != nil {
+		t.Fatalf("list tool calls: %v", err)
+	}
+	foundPendingApproval := false
+	for _, call := range toolCalls {
+		if call.ToolName == highRiskDeployToolName && strings.Contains(call.ResponseJSON, "awaiting_approval") {
+			foundPendingApproval = true
+		}
+	}
+	if !foundPendingApproval {
+		t.Fatalf("expected pending deploy approval tool call")
+	}
+
+	if _, err := manager.ApprovePendingTool(ctx, run.ID, highRiskDeployToolName); err != nil {
+		t.Fatalf("approve pending tool: %v", err)
+	}
+
+	completed := waitForRunCompletion(t, s, run.ID)
+	if completed.Status != "completed" {
+		t.Fatalf("expected completed, got %s", completed.Status)
+	}
+	if deployCount != 1 {
+		t.Fatalf("expected deploy once after approval, got %d", deployCount)
+	}
+	if previewCount != 1 {
+		t.Fatalf("expected preview once after approval, got %d", previewCount)
 	}
 }
 
@@ -1260,7 +1456,7 @@ func waitForRunCompletion(t *testing.T, s *store.Store, runID string) store.Pipe
 		if getErr != nil {
 			t.Fatalf("get run: %v", getErr)
 		}
-		if updated.Status == "completed" || updated.Status == "failed" {
+		if updated.Status == "completed" || updated.Status == "failed" || updated.Status == "awaiting_human" {
 			return updated
 		}
 		time.Sleep(20 * time.Millisecond)

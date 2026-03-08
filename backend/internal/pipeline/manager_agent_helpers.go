@@ -25,7 +25,11 @@ func (m *Manager) bootstrapStepAgent(ctx context.Context, runID string, req Star
 	}
 	bundle, _ := agentconfig.LoadProjectBundle(req.Options.ProjectDir)
 	selectedAgent := bundle.ResolveAgent(req.Agent.Name)
-	selectedMode := bundle.ResolveMode(req.Agent.Mode)
+	selectedModeName := strings.TrimSpace(req.Agent.Mode)
+	if selectedModeName == "" && req.Lifecycle.OneClickDelivery {
+		selectedModeName = "full_cycle"
+	}
+	selectedMode := bundle.ResolveMode(selectedModeName)
 	allowedTools := resolveAllowedTools(bundle, selectedAgent.Name)
 	if existing, err := m.agentRun.GetRunByPipelineRun(ctx, runID); err == nil {
 		selectedAgent = bundle.ResolveAgent(existing.AgentName)

@@ -183,11 +183,13 @@ func (r *scriptedAgentRuntime) Evaluate(ctx context.Context, req agentruntime.Ev
 }
 
 func (r *scriptedAgentRuntime) RecordToolCall(ctx context.Context, req agentruntime.ToolCallRequest) (store.AgentToolCall, error) {
+	requestJSON, _ := json.Marshal(req.Request)
+	responseJSON, _ := json.Marshal(req.Response)
 	return r.store.CreateAgentToolCall(ctx, store.AgentToolCall{
 		AgentStepID:  req.AgentStepID,
 		ToolName:     req.ToolName,
-		RequestJSON:  "{}",
-		ResponseJSON: "{}",
+		RequestJSON:  string(requestJSON),
+		ResponseJSON: string(responseJSON),
 		Success:      req.Success,
 		LatencyMS:    int(req.Latency / time.Millisecond),
 	})
@@ -329,7 +331,7 @@ func TestStartPipelineRateLimited(t *testing.T) {
 
 	payload, _ := json.Marshal(map[string]any{
 		"project_id": project.ID,
-		"prompt":     "???? pipeline ??",
+		"prompt":     "test pipeline prompt",
 		"simulate":   true,
 	})
 
@@ -1173,13 +1175,13 @@ func TestPipelineCompletionAndPreviewEndpoints(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(frontendDir, "app.js"), []byte("console.log('preview');"), 0o644); err != nil {
 		t.Fatalf("write preview js: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(projectDir, "output", "studio-concept.md"), []byte("# ?????\n\n???????"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(projectDir, "output", "studio-concept.md"), []byte("# Concept\n\nConcept summary"), 0o644); err != nil {
 		t.Fatalf("write concept doc: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(projectDir, "output", "studio-prd.md"), []byte("# PRD\n\n??????"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(projectDir, "output", "studio-prd.md"), []byte("# PRD\n\nProduct requirements"), 0o644); err != nil {
 		t.Fatalf("write prd doc: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(projectDir, "output", "studio-reflection.md"), []byte("# ??????\n\n?????????"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(projectDir, "output", "studio-reflection.md"), []byte("# Reflection\n\nReflection summary"), 0o644); err != nil {
 		t.Fatalf("write reflection doc: %v", err)
 	}
 
@@ -1454,6 +1456,76 @@ func TestStepByStepNeedContextPersistsEnrichmentTrace(t *testing.T) {
 	}
 	if !foundEvent {
 		t.Fatalf("expected step-context-enrichment event")
+	}
+}
+
+func TestFullCycleHighRiskDeployRequiresApprovalAndCanContinue(t *testing.T) {
+	env := newAPITestEnv(t)
+	env.pipeline.SetAgentRuntime(newScriptedAgentRuntime(env.store))
+	ctx := context.Background()
+	repoRoot := t.TempDir()
+	project := createProjectViaAPIWithPayload(t, env.handler, map[string]any{
+		"name":        "FullCycleApprovalProject",
+		"description": "test project",
+		"repo_path":   repoRoot,
+	})
+
+	payload, _ := json.Marshal(map[string]any{
+		"project_id":  project.ID,
+		"prompt":      "Run full cycle and wait before deploy",
+		"full_cycle":  true,
+		"project_dir": repoRoot,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/pipeline/runs", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	env.handler.ServeHTTP(res, req)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", res.Code)
+	}
+	var run store.PipelineRun
+	if err := json.Unmarshal(res.Body.Bytes(), &run); err != nil {
+		t.Fatalf("decode run: %v", err)
+	}
+	blocked := waitForRunCompletion(t, env.store, run.ID)
+	if blocked.Status != "awaiting_human" {
+		t.Fatalf("expected awaiting_human, got %q", blocked.Status)
+	}
+	if blocked.Stage != "lifecycle-release-approval" {
+		t.Fatalf("expected lifecycle-release-approval, got %q", blocked.Stage)
+	}
+	agentRun, err := env.store.GetAgentRunByPipelineRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get agent run: %v", err)
+	}
+	if agentRun.ModeName != "full_cycle" {
+		t.Fatalf("expected full_cycle mode, got %q", agentRun.ModeName)
+	}
+	toolCalls, err := env.store.ListAgentToolCalls(ctx, agentRun.ID)
+	if err != nil {
+		t.Fatalf("list tool calls: %v", err)
+	}
+	foundPending := false
+	for _, call := range toolCalls {
+		if call.ToolName == "run_superdev_deploy" && strings.Contains(call.ResponseJSON, "awaiting_approval") {
+			foundPending = true
+		}
+	}
+	if !foundPending {
+		t.Fatalf("expected pending deploy approval tool call")
+	}
+
+	approvePayload, _ := json.Marshal(map[string]any{"tool_name": "run_superdev_deploy"})
+	approveReq := httptest.NewRequest(http.MethodPost, "/api/pipeline/runs/"+run.ID+"/approve-tool", bytes.NewReader(approvePayload))
+	approveReq.Header.Set("Content-Type", "application/json")
+	approveRes := httptest.NewRecorder()
+	env.handler.ServeHTTP(approveRes, approveReq)
+	if approveRes.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", approveRes.Code)
+	}
+	completed := waitForRunCompletion(t, env.store, run.ID)
+	if completed.Status != "completed" {
+		t.Fatalf("expected completed run, got %q", completed.Status)
 	}
 }
 

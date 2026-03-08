@@ -6,7 +6,7 @@
 - Phase 1：Runtime Foundation — 已完成
 - Phase 2：项目级 Agent 配置接入 — 已完成
 - Phase 3：Evaluator / need_human / need_context — 已完成
-- Phase 4：full_cycle Agent 化与治理收口 — 待执行
+- Phase 4：full_cycle Agent 化与治理收口 — 已完成
 
 ## 分阶段推进
 
@@ -61,9 +61,29 @@
 - 证据：`output/agent-evaluator-human-phase3-execution-report.md`
 
 ### Phase 4：full_cycle 与治理收口
-- 状态：待执行
+- 状态：已完成
+- change_id：`agent-fullcycle-governance-phase4`（已归档）
 - 目标：
   - `full_cycle` Agent 化接管
   - 高风险工具确认机制
-  - 安全/性能/覆盖率专项收口
-  - 最终验收与发布说明
+  - 同运行审批后继续执行
+  - 最终验收与发布说明收口
+- 完成标准：
+  - `full_cycle` 运行全过程生成 AgentRun / Step / Tool / Evaluation 轨迹
+  - 高风险 `deploy` 动作进入待确认状态，而不是直接执行
+  - 人工批准后在同一运行中继续，不新建 retry run
+  - 前端能展示待确认提示、风险级别和继续执行入口
+  - `super-dev` 规格、任务、质量门通过并完成归档
+- 执行结果：
+  - 后端完成 `full_cycle` 生命周期 Agent 化接管与高风险 deploy 审批暂停点
+  - 新增 `approve-tool` API，并支持在同一 PipelineRun / AgentRun 中继续执行发布阶段
+  - 前端完成 full-cycle 轨迹展示、高风险动作确认入口、运行摘要提示和交互测试
+  - 自动化验证通过：`go test ./internal/store ./internal/agentconfig ./internal/pipeline ./internal/api`、`npx vitest run`、`npm run build`
+  - 流水线门禁通过：`super-dev task run agent-fullcycle-governance-phase4`、`super-dev quality --type all`、`super-dev spec archive agent-fullcycle-governance-phase4`
+- 证据：`output/agent-fullcycle-governance-phase4-execution-report.md`
+
+## 收尾结论
+
+- Agent Core 0-4 阶段全部完成。
+- 当前已具备 step-by-step 与 full-cycle 两类 Agent 执行模式，以及人工接管、上下文补强、高风险工具审批等关键治理能力。
+- 后续若继续推进，建议转入体验优化、工具风险分级扩展、覆盖率专项和发布运营能力建设。

@@ -91,7 +91,7 @@ func defaultBundle() Bundle {
 		Agents: []AgentConfig{{
 			Name:          "delivery-agent",
 			Description:   "Default delivery agent for step-by-step software delivery.",
-			AllowedTools:  []string{"search_context", "run_superdev_create", "run_superdev_task_status", "run_superdev_task_run", "run_superdev_quality", "read_artifact", "append_run_event"},
+			AllowedTools:  []string{"search_context", "run_superdev_create", "run_superdev_pipeline", "run_superdev_task_status", "run_superdev_task_run", "run_superdev_quality", "run_superdev_preview", "run_superdev_deploy", "read_artifact", "append_run_event"},
 			DefaultSkills: []string{"super-dev-delivery"},
 			MaxSteps:      24,
 		}},
@@ -99,6 +99,12 @@ func defaultBundle() Bundle {
 			Name:        "step_by_step",
 			Description: "Execute create -> spec validate -> task status -> task run -> quality -> preview -> deploy with repair loops.",
 			MaxRetries:  3,
+		}, {
+			Name:            "full_cycle",
+			Description:     "Execute pipeline -> iterate -> quality -> preview -> deploy with agent observability and approval gates.",
+			AllowDeploy:     true,
+			MaxRetries:      3,
+			RequireApproval: true,
 		}},
 		Skills: []SkillConfig{{
 			Name:             "super-dev-delivery",

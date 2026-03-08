@@ -88,6 +88,7 @@ func (s *Server) Router() http.Handler {
 	r.With(s.rateLimit(s.pipelinePolicy("runs:start"))).Post("/api/pipeline/runs", s.handleStartPipeline)
 	r.With(s.rateLimit(s.pipelinePolicy("runs:retry"))).Post("/api/pipeline/runs/{runID}/retry", s.handleRetryPipeline)
 	r.With(s.rateLimit(s.pipelinePolicy("runs:retry"))).Post("/api/pipeline/runs/{runID}/resume", s.handleResumePipeline)
+	r.With(s.rateLimit(s.pipelinePolicy("runs:retry"))).Post("/api/pipeline/runs/{runID}/approve-tool", s.handleApprovePipelineTool)
 	r.Get("/api/pipeline/runs/{runID}", s.handleGetPipelineRun)
 	r.Get("/api/pipeline/runs/{runID}/agent", s.handleGetPipelineRunAgent)
 	r.Get("/api/pipeline/runs/{runID}/agent/steps", s.handleListPipelineRunAgentSteps)
@@ -585,7 +586,22 @@ func (s *Server) handleAdvanceProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	projectDir := s.resolveProjectDirForAdvance(r.Context(), projectID, project.RepoPath)
-	agentName, agentMode, selectionErr := s.resolveProjectAgentSelection(r, project, projectDir, project.DefaultAgentName, project.DefaultAgentMode)
+	preferredLifecycleMode := func() string {
+		if mode == advanceModeFullCycle {
+			return advanceModeFullCycle
+		}
+		if mode == advanceModeStepByStep {
+			return advanceModeStepByStep
+		}
+		return ""
+	}()
+	agentName, agentMode, selectionErr := s.resolveProjectAgentSelection(
+		r,
+		project,
+		projectDir,
+		project.DefaultAgentName,
+		resolveProjectLifecycleMode(project, project.DefaultAgentMode, preferredLifecycleMode, ""),
+	)
 	if selectionErr != nil {
 		respondError(w, http.StatusBadRequest, selectionErr)
 		return
@@ -883,7 +899,22 @@ func (s *Server) handleStartPipeline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	effectiveProjectDir := firstNonEmpty(strings.TrimSpace(req.ProjectDir), strings.TrimSpace(project.RepoPath))
-	agentName, agentMode, selectionErr := s.resolveProjectAgentSelection(r, project, effectiveProjectDir, req.AgentName, req.AgentMode)
+	preferredLifecycleMode := func() string {
+		if req.FullCycle {
+			return advanceModeFullCycle
+		}
+		if req.StepByStep {
+			return advanceModeStepByStep
+		}
+		return ""
+	}()
+	agentName, agentMode, selectionErr := s.resolveProjectAgentSelection(
+		r,
+		project,
+		effectiveProjectDir,
+		req.AgentName,
+		resolveProjectLifecycleMode(project, req.AgentMode, preferredLifecycleMode, ""),
+	)
 	if selectionErr != nil {
 		respondError(w, http.StatusBadRequest, selectionErr)
 		return
@@ -992,6 +1023,29 @@ func (s *Server) handleResumePipeline(w http.ResponseWriter, r *http.Request) {
 		Message: fmt.Sprintf("Resumed from awaiting_human run %s", previousRun.ID),
 	})
 
+	respondJSON(w, http.StatusAccepted, run)
+}
+
+type approvePipelineToolRequest struct {
+	ToolName string `json:"tool_name"`
+}
+
+func (s *Server) handleApprovePipelineTool(w http.ResponseWriter, r *http.Request) {
+	runID := chi.URLParam(r, "runID")
+	var req approvePipelineToolRequest
+	if err := decodeJSON(r, &req); err != nil && !errors.Is(err, io.EOF) {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	run, err := s.pipeline.ApprovePendingTool(r.Context(), runID, req.ToolName)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			respondError(w, http.StatusNotFound, err)
+			return
+		}
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
 	respondJSON(w, http.StatusAccepted, run)
 }
 
@@ -1116,6 +1170,16 @@ func parseAdvanceMode(raw string) (string, error) {
 	default:
 		return "", errors.New("mode must be one of: step_by_step, full_cycle")
 	}
+}
+
+func resolveProjectLifecycleMode(project store.Project, requestedModeName, preferredLifecycleMode, fallbackMode string) string {
+	requested := strings.TrimSpace(requestedModeName)
+	projectDefault := strings.TrimSpace(project.DefaultAgentMode)
+	preferred := strings.TrimSpace(preferredLifecycleMode)
+	if preferred == advanceModeFullCycle && (requested == "" || strings.EqualFold(requested, projectDefault)) {
+		return preferred
+	}
+	return firstNonEmpty(requested, projectDefault, fallbackMode)
 }
 
 func buildChangeBatchTitle(projectName, goal, mode string) string {

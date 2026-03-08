@@ -23,6 +23,7 @@ export default function ProjectSettingsPage() {
     queryKey: ['project-agent-bundle', activeProjectId],
     queryFn: () => apiClient.getProjectAgentBundle(activeProjectId),
     enabled: !!activeProjectId,
+    retry: false,
   });
 
   useEffect(() => {

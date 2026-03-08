@@ -1,6 +1,6 @@
 # Spec 任务执行报告
 
-- Change: `agent-evaluator-human-phase3`
+- Change: `agent-fullcycle-governance-phase4`
 - 总任务: 11
 - 已完成: 11
 - 未完成: 0
