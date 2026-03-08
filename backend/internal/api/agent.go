@@ -164,20 +164,72 @@ func (s *Server) resolveProjectAgentSelection(r *http.Request, project store.Pro
 	if err != nil {
 		return "", "", err
 	}
-	agentName := firstNonEmpty(strings.TrimSpace(requestedAgentName), strings.TrimSpace(project.DefaultAgentName), bundle.ResolveAgent("").Name)
-	modeName := firstNonEmpty(strings.TrimSpace(requestedModeName), strings.TrimSpace(project.DefaultAgentMode), bundle.ResolveMode("").Name)
-	if _, ok := bundle.FindAgent(agentName); !ok {
-		return "", "", errors.New("agent_name is not defined in project agent bundle")
+
+	agentName, err := resolveRuntimeAgentName(bundle, requestedAgentName, project.DefaultAgentName)
+	if err != nil {
+		return "", "", err
 	}
-	if _, ok := bundle.FindMode(modeName); !ok {
-		return "", "", errors.New("agent_mode is not defined in project agent bundle")
+	modeName, err := resolveRuntimeModeName(bundle, requestedModeName, project.DefaultAgentMode)
+	if err != nil {
+		return "", "", err
 	}
 	return agentName, modeName, nil
 }
 
+func resolveRuntimeAgentName(bundle agentconfig.Bundle, requestedAgentName, projectDefaultAgentName string) (string, error) {
+	requested := strings.TrimSpace(requestedAgentName)
+	projectDefault := strings.TrimSpace(projectDefaultAgentName)
+	if requested != "" {
+		if _, ok := bundle.FindAgent(requested); ok {
+			return requested, nil
+		}
+		if !strings.EqualFold(requested, projectDefault) {
+			return "", errors.New("agent_name is not defined in project agent bundle")
+		}
+	}
+	if projectDefault != "" {
+		if _, ok := bundle.FindAgent(projectDefault); ok {
+			return projectDefault, nil
+		}
+	}
+	return bundle.ResolveAgent("").Name, nil
+}
+
+func resolveRuntimeModeName(bundle agentconfig.Bundle, requestedModeName, projectDefaultModeName string) (string, error) {
+	requested := strings.TrimSpace(requestedModeName)
+	projectDefault := strings.TrimSpace(projectDefaultModeName)
+	if requested != "" {
+		if _, ok := bundle.FindMode(requested); ok {
+			return requested, nil
+		}
+		if !strings.EqualFold(requested, projectDefault) {
+			return "", errors.New("agent_mode is not defined in project agent bundle")
+		}
+	}
+	if projectDefault != "" {
+		if _, ok := bundle.FindMode(projectDefault); ok {
+			return projectDefault, nil
+		}
+	}
+	return bundle.ResolveMode("").Name, nil
+}
+
 func (s *Server) validateProjectAgentDefaults(project store.Project) error {
-	_, _, err := s.resolveProjectAgentSelection(nil, project, project.RepoPath, project.DefaultAgentName, project.DefaultAgentMode)
-	return err
+	bundle, err := agentconfig.LoadProjectBundle(strings.TrimSpace(project.RepoPath))
+	if err != nil {
+		return err
+	}
+	if name := strings.TrimSpace(project.DefaultAgentName); name != "" {
+		if _, ok := bundle.FindAgent(name); !ok {
+			return errors.New("default_agent_name is not defined in project agent bundle")
+		}
+	}
+	if mode := strings.TrimSpace(project.DefaultAgentMode); mode != "" {
+		if _, ok := bundle.FindMode(mode); !ok {
+			return errors.New("default_agent_mode is not defined in project agent bundle")
+		}
+	}
+	return nil
 }
 
 func (s *Server) loadProjectAgentBundle(r *http.Request) (store.Project, agentconfig.Bundle, error) {

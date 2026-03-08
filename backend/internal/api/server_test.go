@@ -1377,6 +1377,57 @@ max_retries: 2
 	}
 }
 
+func TestStartPipelineFallsBackWhenStoredAgentDefaultsAreStale(t *testing.T) {
+	env := newAPITestEnv(t)
+	enableAgentRuntimeForTest(t, env)
+	ctx := context.Background()
+	repoRoot := t.TempDir()
+
+	project, err := env.store.CreateProject(ctx, store.Project{
+		Name:             "StaleAgentDefaults",
+		Description:      "project with stale stored agent defaults",
+		RepoPath:         repoRoot,
+		DefaultAgentName: "reviewer",
+		DefaultAgentMode: "review",
+	})
+	if err != nil {
+		t.Fatalf("create stale project directly in store: %v", err)
+	}
+
+	payload, _ := json.Marshal(map[string]any{
+		"project_id":   project.ID,
+		"prompt":       "Use stale defaults but still start the pipeline",
+		"step_by_step": true,
+		"project_dir":  repoRoot,
+		"agent_name":   "reviewer",
+		"agent_mode":   "review",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/pipeline/runs", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	env.handler.ServeHTTP(res, req)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 fallback instead of 400, got %d body=%s", res.Code, res.Body.String())
+	}
+
+	var run store.PipelineRun
+	if err := json.Unmarshal(res.Body.Bytes(), &run); err != nil {
+		t.Fatalf("decode run: %v", err)
+	}
+	waitForRunCompletion(t, env.store, run.ID)
+
+	agentRun, err := env.store.GetAgentRunByPipelineRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get agent run: %v", err)
+	}
+	if agentRun.AgentName != "delivery-agent" {
+		t.Fatalf("expected fallback agent delivery-agent, got %q", agentRun.AgentName)
+	}
+	if agentRun.ModeName != "step_by_step" {
+		t.Fatalf("expected fallback mode step_by_step, got %q", agentRun.ModeName)
+	}
+}
+
 func TestStepByStepNeedContextPersistsEnrichmentTrace(t *testing.T) {
 	env := newAPITestEnv(t)
 	env.pipeline.SetAgentRuntime(newScriptedAgentRuntime(env.store, "need_context", "pass", "pass", "pass"))

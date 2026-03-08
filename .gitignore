@@ -5,3 +5,5 @@ backend/data/superdev_studio.db
 /.super-dev
 /coverage
 /backend/coverage
+output/backend-dev.log
+/output
