@@ -116,13 +116,42 @@ export default function PipelinePage() {
   const selectedRunId = runs.some((item) => item.id === manualSelectedRunId)
     ? manualSelectedRunId
     : runs[0]?.id ?? '';
+  const bundleAgentNames = useMemo(
+    () => (bundleQuery.data?.agents ?? []).map((item) => item.name.trim()).filter(Boolean),
+    [bundleQuery.data],
+  );
+  const bundleModeNames = useMemo(
+    () => (bundleQuery.data?.modes ?? []).map((item) => item.name.trim()).filter(Boolean),
+    [bundleQuery.data],
+  );
+  const projectDefaultAgentName = (projectQuery.data?.default_agent_name ?? '').trim();
+  const projectDefaultAgentMode = (projectQuery.data?.default_agent_mode ?? '').trim();
+  const bundleFallbackAgentName = firstNonEmptyValue(bundleAgentNames[0], 'delivery-agent');
+  const bundleFallbackModeName = firstNonEmptyValue(bundleModeNames[0], 'step_by_step');
+  const resolvedProjectAgentName = resolveBundleSelection(projectDefaultAgentName, bundleAgentNames, bundleFallbackAgentName);
+  const resolvedProjectAgentMode = resolveBundleSelection(projectDefaultAgentMode, bundleModeNames, bundleFallbackModeName);
+  const staleProjectAgentName = Boolean(bundleAgentNames.length && projectDefaultAgentName && !hasNamedOption(bundleAgentNames, projectDefaultAgentName));
+  const staleProjectAgentMode = Boolean(bundleModeNames.length && projectDefaultAgentMode && !hasNamedOption(bundleModeNames, projectDefaultAgentMode));
+  const agentFallbackNotice = useMemo(() => {
+    if (!staleProjectAgentName && !staleProjectAgentMode) {
+      return undefined;
+    }
+    const details: string[] = [];
+    if (staleProjectAgentName) {
+      details.push(`默认 Agent 已从 ${projectDefaultAgentName} 回退为 ${resolvedProjectAgentName}`);
+    }
+    if (staleProjectAgentMode) {
+      details.push(`默认 Mode 已从 ${projectDefaultAgentMode} 回退为 ${resolvedProjectAgentMode}`);
+    }
+    return details.join('；');
+  }, [projectDefaultAgentName, projectDefaultAgentMode, resolvedProjectAgentName, resolvedProjectAgentMode, staleProjectAgentName, staleProjectAgentMode]);
   const agentOptions = useMemo(
-    () => buildSelectOptions([...(bundleQuery.data?.agents ?? []).map((item) => item.name), projectQuery.data?.default_agent_name]),
-    [bundleQuery.data, projectQuery.data],
+    () => buildSelectOptions([...(bundleQuery.data?.agents ?? []).map((item) => item.name), resolvedProjectAgentName]),
+    [bundleQuery.data, resolvedProjectAgentName],
   );
   const agentModeOptions = useMemo(
-    () => buildSelectOptions([...(bundleQuery.data?.modes ?? []).map((item) => item.name), projectQuery.data?.default_agent_mode]),
-    [bundleQuery.data, projectQuery.data],
+    () => buildSelectOptions([...(bundleQuery.data?.modes ?? []).map((item) => item.name), resolvedProjectAgentMode]),
+    [bundleQuery.data, resolvedProjectAgentMode],
   );
 
   const runQuery = useQuery({
@@ -291,23 +320,23 @@ export default function PipelinePage() {
       context_max_items: project.default_context_max_items,
       context_dynamic: project.default_context_dynamic,
       memory_writeback: project.default_memory_writeback,
-      agent_name: project.default_agent_name,
-      agent_mode: project.default_agent_mode,
+      agent_name: resolvedProjectAgentName,
+      agent_mode: resolvedProjectAgentMode,
       llm_enhanced_loop: true,
     });
-  }, [form, projectQuery.data]);
+  }, [form, projectQuery.data, resolvedProjectAgentName, resolvedProjectAgentMode]);
 
   useEffect(() => {
     if (!fullCycle) {
       if (stepByStep && form.getFieldValue('agent_mode') === 'full_cycle') {
-        form.setFieldValue('agent_mode', projectQuery.data?.default_agent_mode || 'step_by_step');
+        form.setFieldValue('agent_mode', resolvedProjectAgentMode || 'step_by_step');
       }
       return;
     }
     if (form.getFieldValue('agent_mode') !== 'full_cycle') {
       form.setFieldValue('agent_mode', 'full_cycle');
     }
-  }, [form, fullCycle, stepByStep, projectQuery.data]);
+  }, [form, fullCycle, stepByStep, resolvedProjectAgentMode]);
 
   const stageBoard = useMemo(() => buildStageBoard(completionData), [completionData]);
   const allArtifacts = useMemo(() => completionData?.artifacts ?? [], [completionData]);
@@ -448,8 +477,10 @@ export default function PipelinePage() {
                       context_max_items: values.context_max_items,
                       context_dynamic: values.context_dynamic,
                       memory_writeback: values.memory_writeback,
-                      agent_name: values.agent_name,
-                      agent_mode: values.agent_mode,
+                      agent_name: resolveBundleSelection(values.agent_name, bundleAgentNames, resolvedProjectAgentName),
+                      agent_mode: values.full_cycle
+                        ? 'full_cycle'
+                        : resolveBundleSelection(values.agent_mode, bundleModeNames, resolvedProjectAgentMode || 'step_by_step'),
                     });
                   }}
                 >
@@ -500,6 +531,16 @@ export default function PipelinePage() {
                   ) : null}
 
                   <Card size="small" title="Agent Strategy" style={{ marginBottom: 16, borderRadius: 16 }}>
+                    {agentFallbackNotice ? (
+                      <Alert
+                        showIcon
+                        type="warning"
+                        data-testid="pipeline-agent-default-fallback-alert"
+                        style={{ marginBottom: 12, borderRadius: 14 }}
+                        title="检测到项目默认 Agent 配置已失效"
+                        description={agentFallbackNotice}
+                      />
+                    ) : null}
                     <Row gutter={12}>
                       <Col span={12}>
                         <Form.Item name="agent_name" label="Agent">
@@ -774,6 +815,37 @@ function pickDefaultArtifact(artifacts: PipelineArtifact[]) {
 
 function buildSelectOptions(values: Array<string | undefined>) {
   return Array.from(new Set(values.map((item) => (item ?? "").trim()).filter(Boolean))).map((value) => ({ value, label: value }));
+}
+
+
+function hasNamedOption(options: string[], value?: string) {
+  const normalizedValue = (value ?? '').trim().toLowerCase();
+  return normalizedValue !== '' && options.some((item) => item.trim().toLowerCase() === normalizedValue);
+}
+
+function firstNonEmptyValue(...values: Array<string | undefined>) {
+  for (const value of values) {
+    const normalizedValue = (value ?? '').trim();
+    if (normalizedValue) {
+      return normalizedValue;
+    }
+  }
+  return '';
+}
+
+function resolveBundleSelection(rawValue: string | undefined, availableOptions: string[], fallbackValue: string) {
+  const normalizedValue = (rawValue ?? '').trim();
+  const normalizedFallback = firstNonEmptyValue(fallbackValue, availableOptions[0]);
+  if (availableOptions.length === 0) {
+    return firstNonEmptyValue(normalizedValue, normalizedFallback);
+  }
+  if (normalizedValue && hasNamedOption(availableOptions, normalizedValue)) {
+    return normalizedValue;
+  }
+  if (normalizedFallback && hasNamedOption(availableOptions, normalizedFallback)) {
+    return normalizedFallback;
+  }
+  return availableOptions[0];
 }
 
 function parseMultimodalAssets(raw?: string) {

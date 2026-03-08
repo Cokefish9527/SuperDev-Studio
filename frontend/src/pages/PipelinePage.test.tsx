@@ -16,6 +16,7 @@ const TAB_PREVIEW = '产物预览';
 const TAB_STAGES = '阶段产物';
 const TAB_EXECUTION = '执行轨迹';
 const PREVIEW_PAGE_LABEL = '预览页面';
+const AGENT_DEFAULT_FALLBACK_ALERT = '检测到项目默认 Agent 配置已失效';
 
 vi.mock('../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/client')>();
@@ -278,6 +279,71 @@ describe('PipelinePage', () => {
       );
     });
   }, 12000);
+
+  it('falls back stale project agent defaults to bundle defaults and shows warning', async () => {
+    vi.mocked(apiClient.getProject).mockResolvedValue({
+      id: 'project-1',
+      name: 'Studio',
+      description: 'test',
+      repo_path: 'D:/Work/agent-demo/SuperDev-Studio',
+      status: 'active',
+      default_platform: 'web',
+      default_frontend: 'react',
+      default_backend: 'go',
+      default_domain: 'saas',
+      default_agent_name: 'legacy-reviewer',
+      default_agent_mode: 'review',
+      default_context_mode: 'auto',
+      default_context_token_budget: 1200,
+      default_context_max_items: 8,
+      default_context_dynamic: true,
+      default_memory_writeback: true,
+      created_at: '2026-03-05T00:00:00Z',
+      updated_at: '2026-03-05T00:00:00Z',
+    });
+    vi.mocked(apiClient.getProjectAgentBundle).mockResolvedValue({
+      project_id: 'project-1',
+      project_dir: 'D:/Work/agent-demo/SuperDev-Studio',
+      default_agent_name: 'legacy-reviewer',
+      default_agent_mode: 'review',
+      agents: [{ name: 'delivery-agent', description: 'Delivery agent' }],
+      modes: [{ name: 'step_by_step', description: 'Step mode' }, { name: 'full_cycle', description: 'Full cycle mode' }],
+    });
+    vi.mocked(apiClient.startPipeline).mockResolvedValue({
+      id: 'run-fallback',
+      project_id: 'project-1',
+      prompt: 'fallback-agent-run',
+      status: 'queued',
+      progress: 0,
+      stage: 'queued',
+      created_at: '2026-03-05T00:00:00Z',
+      updated_at: '2026-03-05T00:00:00Z',
+    });
+
+    renderWithProviders(<PipelinePage />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pipeline-agent-default-fallback-alert')).toBeInTheDocument();
+      expect(screen.getByText(AGENT_DEFAULT_FALLBACK_ALERT)).toBeInTheDocument();
+    });
+
+    await userEvent.clear(screen.getByPlaceholderText(PROMPT_PLACEHOLDER));
+    await userEvent.type(screen.getByPlaceholderText(PROMPT_PLACEHOLDER), 'fallback-agent-run');
+    await userEvent.click(screen.getByRole('button', { name: START_BUTTON }));
+
+    await waitFor(() => {
+      expect(apiClient.startPipeline).toHaveBeenCalled();
+      const [payload] = vi.mocked(apiClient.startPipeline).mock.calls.at(-1)!;
+      expect(payload).toEqual(
+        expect.objectContaining({
+          prompt: 'fallback-agent-run',
+          agent_name: 'delivery-agent',
+          agent_mode: 'step_by_step',
+        }),
+      );
+    });
+  }, 12000);
+
 
   it('retries a failed run from compact summary', async () => {
     vi.mocked(apiClient.listRuns).mockResolvedValue([
