@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +17,50 @@ import (
 )
 
 var ErrNotFound = errors.New("record not found")
+
+var sqliteIdentifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+var allowedSchemaMutations = map[string]map[string]string{
+	"pipeline_runs": {
+		"change_batch_id":      "TEXT NOT NULL DEFAULT ''",
+		"external_change_id":   "TEXT NOT NULL DEFAULT ''",
+		"llm_enhanced_loop":    "INTEGER NOT NULL DEFAULT 0",
+		"multimodal_assets":    "TEXT NOT NULL DEFAULT '[]'",
+		"simulate":             "INTEGER NOT NULL DEFAULT 1",
+		"project_dir":          "TEXT NOT NULL DEFAULT ''",
+		"platform":             "TEXT NOT NULL DEFAULT ''",
+		"frontend":             "TEXT NOT NULL DEFAULT ''",
+		"backend":              "TEXT NOT NULL DEFAULT ''",
+		"domain":               "TEXT NOT NULL DEFAULT ''",
+		"context_mode":         "TEXT NOT NULL DEFAULT 'off'",
+		"context_query":        "TEXT NOT NULL DEFAULT ''",
+		"context_token_budget": "INTEGER NOT NULL DEFAULT 0",
+		"context_max_items":    "INTEGER NOT NULL DEFAULT 0",
+		"context_dynamic":      "INTEGER NOT NULL DEFAULT 0",
+		"memory_writeback":     "INTEGER NOT NULL DEFAULT 1",
+		"full_cycle":           "INTEGER NOT NULL DEFAULT 0",
+		"step_by_step":         "INTEGER NOT NULL DEFAULT 0",
+		"iteration_limit":      "INTEGER NOT NULL DEFAULT 3",
+		"retry_of":             "TEXT NOT NULL DEFAULT ''",
+	},
+	"projects": {
+		"default_platform":          "TEXT NOT NULL DEFAULT 'web'",
+		"default_frontend":          "TEXT NOT NULL DEFAULT 'react'",
+		"default_backend":           "TEXT NOT NULL DEFAULT 'go'",
+		"default_domain":            "TEXT NOT NULL DEFAULT ''",
+		"default_agent_name":        "TEXT NOT NULL DEFAULT 'delivery-agent'",
+		"default_agent_mode":        "TEXT NOT NULL DEFAULT 'step_by_step'",
+		"default_context_mode":      "TEXT NOT NULL DEFAULT 'auto'",
+		"default_context_token_budget": "INTEGER NOT NULL DEFAULT 1200",
+		"default_context_max_items": "INTEGER NOT NULL DEFAULT 8",
+		"default_context_dynamic":   "INTEGER NOT NULL DEFAULT 1",
+		"default_memory_writeback":  "INTEGER NOT NULL DEFAULT 1",
+	},
+	"tasks": {
+		"start_date":     "TEXT",
+		"estimated_days": "INTEGER NOT NULL DEFAULT 0",
+	},
+}
 
 type Store struct {
 	db         *sql.DB
@@ -343,7 +388,13 @@ func (s *Store) ensureTaskColumns(ctx context.Context) error {
 }
 
 func (s *Store) ensureTableColumn(ctx context.Context, tableName, columnName, definition string) error {
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", tableName))
+	if err := validateSchemaMutation(tableName, columnName, definition); err != nil {
+		return err
+	}
+
+	quotedTableName := quoteSQLiteIdentifier(tableName)
+	quotedColumnName := quoteSQLiteIdentifier(columnName)
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", quotedTableName))
 	if err != nil {
 		return err
 	}
@@ -374,9 +425,34 @@ func (s *Store) ensureTableColumn(ctx context.Context, tableName, columnName, de
 
 	_, err = s.db.ExecContext(
 		ctx,
-		fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", tableName, columnName, definition),
+		fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", quotedTableName, quotedColumnName, definition),
 	)
 	return err
+}
+
+func validateSchemaMutation(tableName, columnName, definition string) error {
+	if !sqliteIdentifierPattern.MatchString(tableName) {
+		return fmt.Errorf("invalid schema table identifier: %s", tableName)
+	}
+	if !sqliteIdentifierPattern.MatchString(columnName) {
+		return fmt.Errorf("invalid schema column identifier: %s", columnName)
+	}
+	allowedColumns, ok := allowedSchemaMutations[tableName]
+	if !ok {
+		return fmt.Errorf("schema mutation not allowed for table %s", tableName)
+	}
+	expectedDefinition, ok := allowedColumns[columnName]
+	if !ok {
+		return fmt.Errorf("schema mutation not allowed for %s.%s", tableName, columnName)
+	}
+	if definition != expectedDefinition {
+		return fmt.Errorf("schema definition mismatch for %s.%s", tableName, columnName)
+	}
+	return nil
+}
+
+func quoteSQLiteIdentifier(identifier string) string {
+	return fmt.Sprintf(`"%s"`, identifier)
 }
 
 func nowUTC() time.Time {

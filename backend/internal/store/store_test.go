@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -204,6 +205,21 @@ func TestStore_AgentRuntimeFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create agent step: %v", err)
 	}
+	if step.StepIndex != 1 {
+		t.Fatalf("expected first agent step index=1, got %d", step.StepIndex)
+	}
+
+	step2, err := s.CreateAgentStep(ctx, AgentStep{
+		AgentRunID: agentRun.ID,
+		NodeName:   "plan",
+		Title:      "Plan next step",
+	})
+	if err != nil {
+		t.Fatalf("create second agent step: %v", err)
+	}
+	if step2.StepIndex != 2 {
+		t.Fatalf("expected second agent step index=2, got %d", step2.StepIndex)
+	}
 
 	if _, err := s.CreateAgentToolCall(ctx, AgentToolCall{
 		AgentStepID:  step.ID,
@@ -242,8 +258,11 @@ func TestStore_AgentRuntimeFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list agent steps: %v", err)
 	}
-	if len(steps) != 1 {
-		t.Fatalf("expected 1 step, got %d", len(steps))
+	if len(steps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(steps))
+	}
+	if steps[0].StepIndex != 1 || steps[1].StepIndex != 2 {
+		t.Fatalf("expected ordered step indexes [1,2], got [%d,%d]", steps[0].StepIndex, steps[1].StepIndex)
 	}
 
 	toolCalls, err := s.ListAgentToolCalls(ctx, agentRun.ID)
@@ -300,5 +319,68 @@ func TestStore_ProjectAgentDefaultsPersist(t *testing.T) {
 	}
 	if updated.DefaultAgentName != "delivery-agent" || updated.DefaultAgentMode != "step_by_step" {
 		t.Fatalf("expected updated agent defaults, got %q/%q", updated.DefaultAgentName, updated.DefaultAgentMode)
+	}
+}
+
+func TestStore_EnsureTableColumnAcceptsAllowlistedMutation(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	if err := s.ensureTableColumn(ctx, "tasks", "start_date", "TEXT"); err != nil {
+		t.Fatalf("expected allowlisted schema mutation to pass, got %v", err)
+	}
+}
+
+func TestStore_EnsureTableColumnRejectsUnsafeSchemaMutation(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	testCases := []struct {
+		name       string
+		tableName  string
+		columnName string
+		definition string
+		wantErr    string
+	}{
+		{
+			name:       "invalid table identifier",
+			tableName:  "tasks;DROP_TABLE_tasks",
+			columnName: "start_date",
+			definition: "TEXT",
+			wantErr:    "invalid schema table identifier",
+		},
+		{
+			name:       "invalid column identifier",
+			tableName:  "tasks",
+			columnName: "start_date;DROP_TABLE_tasks",
+			definition: "TEXT",
+			wantErr:    "invalid schema column identifier",
+		},
+		{
+			name:       "unexpected column definition",
+			tableName:  "tasks",
+			columnName: "start_date",
+			definition: "TEXT NOT NULL",
+			wantErr:    "schema definition mismatch",
+		},
+		{
+			name:       "unexpected allowlist column",
+			tableName:  "tasks",
+			columnName: "user_input",
+			definition: "TEXT",
+			wantErr:    "schema mutation not allowed",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := s.ensureTableColumn(ctx, testCase.tableName, testCase.columnName, testCase.definition)
+			if err == nil {
+				t.Fatalf("expected error for %s", testCase.name)
+			}
+			if !strings.Contains(err.Error(), testCase.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", testCase.wantErr, err)
+			}
+		})
 	}
 }

@@ -1,22 +1,25 @@
 {
   "project_name": "superdev-studio",
-  "generated_at": "2026-03-08T05:41:22.564882+00:00",
-  "coverage_percent": 61.5,
-  "coverage_scope": "full-backend",
-  "coverage_fallback_reason": null,
+  "generated_at": "2026-03-08T16:59:16.440147+00:00",
+  "coverage_percent": 63.2,
+  "coverage_scope": "core-backend-packages",
+  "coverage_fallback_reason": "全量 go test ./... 被非稳定包阻塞，已回退到核心后端包集合。",
   "coverage_xml": "coverage\\cobertura-coverage.xml",
   "python3_shim": "coverage\\.shims\\python3.cmd",
   "redteam": {
-    "score": 48,
+    "score": 58,
     "passed": false,
     "critical_count": 0,
-    "high_count": 1
+    "high_count": 0
   },
   "quality_gate": {
-    "score": 96,
-    "passed": true,
-    "critical_failures": [],
+    "score": 93,
+    "passed": false,
+    "critical_failures": [
+      "[testing] Spec 任务闭环状态"
+    ],
     "recommendations": [
+      "修复: Spec 任务闭环状态",
       "建议: 覆盖率报告"
     ]
   }

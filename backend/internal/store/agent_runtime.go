@@ -291,11 +291,11 @@ func (s *Store) ListAgentEvaluations(ctx context.Context, agentRunID string) ([]
 }
 
 func (s *Store) nextAgentStepIndex(ctx context.Context, agentRunID string) int {
-	var next int
-	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(step_index), 0) + 1 FROM agent_steps WHERE agent_run_id=?`, agentRunID).Scan(&next); err != nil || next <= 0 {
+	var currentMax int
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(step_index), 0) FROM agent_steps WHERE agent_run_id=?`, agentRunID).Scan(&currentMax); err != nil || currentMax < 0 {
 		return 1
 	}
-	return next
+	return currentMax + 1
 }
 
 func scanAgentRun(row rowScanner, run *AgentRun) error {
