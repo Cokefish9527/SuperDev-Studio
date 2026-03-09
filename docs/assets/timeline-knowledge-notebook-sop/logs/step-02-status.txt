@@ -1,0 +1,17 @@
+PS d:\Work\agent-demo\SuperDev-Studio\output\sop-demo\timeline-knowledge-notebook> C:\Program Files\Python311\python.exe C:/Users/bmkz/.codex/skills/super-dev/scripts/super_dev_status.py --root .
+
+Root: D:\Work\agent-demo\SuperDev-Studio\output\sop-demo\timeline-knowledge-notebook
+.super-dev detected: yes
+project.md detected: yes
+Active change_id: timeline-knowledge-notebook
+Tasks: 13/13 done
+Quality score: 73
+
+Recommended next commands:
+- super-dev task status timeline-knowledge-notebook
+- super-dev quality --type all
+- super-dev task run timeline-knowledge-notebook
+
+Notes:
+- 当前 change 任务已全部完成。
+- 当前质量分 73，低于目标 80。

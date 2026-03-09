@@ -195,3 +195,41 @@ type ContextPack struct {
 	Memories        []Memory         `json:"memories"`
 	Knowledge       []KnowledgeChunk `json:"knowledge"`
 }
+
+// RequirementSession tracks requirement intake to confirmation.
+type RequirementSession struct {
+	ID                  string     `json:"id"`
+	ProjectID           string     `json:"project_id"`
+	Title               string     `json:"title"`
+	RawInput            string     `json:"raw_input"`
+	Status              string     `json:"status"` // draft | awaiting_confirm | confirmed
+	LatestSummary       string     `json:"latest_summary"`
+	LatestPRD           string     `json:"latest_prd"`
+	LatestPlan          string     `json:"latest_plan"`
+	LatestRisks         string     `json:"latest_risks"`
+	LatestChangeBatchID string     `json:"latest_change_batch_id,omitempty"`
+	LatestRunID         string     `json:"latest_run_id,omitempty"`
+	ConfirmedAt         *time.Time `json:"confirmed_at,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
+}
+
+// RequirementDocVersion stores versioned artifacts produced during intake.
+type RequirementDocVersion struct {
+	ID        string    `json:"id"`
+	SessionID string    `json:"session_id"`
+	ProjectID string    `json:"project_id"`
+	Type      string    `json:"type"` // summary | prd | plan | risks
+	Content   string    `json:"content"`
+	Version   int       `json:"version"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// RequirementConfirmation records user confirmation.
+type RequirementConfirmation struct {
+	ID        string    `json:"id"`
+	SessionID string    `json:"session_id"`
+	ProjectID string    `json:"project_id"`
+	Note      string    `json:"note"`
+	CreatedAt time.Time `json:"created_at"`
+}

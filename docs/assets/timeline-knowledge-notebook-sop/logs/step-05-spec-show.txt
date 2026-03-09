@@ -1,0 +1,29 @@
+PS d:\Work\agent-demo\SuperDev-Studio\output\sop-demo\timeline-knowledge-notebook> super-dev spec show timeline-knowledge-notebook
+
+变更详情: timeline-knowledge-notebook
+  标题: Timeline Knowledge Notebook
+  状态: completed
+
+提案:
+  ????????????????????????
+动机: 用户需求驱动的功能开发
+
+任务:
+   1.1: 梳理增量变更影响范围
+   1.2: 确定灰度与开关策略
+   2.1: 实现 core 前端模块
+   2.2: 实现 experience 前端模块
+   2.3: 实现 operation 前端模块
+   3.1: 实现 core 后端能力
+   3.2: 实现 experience 后端能力
+   3.3: 实现 operation 后端能力
+   4.1: 完成端到端联调
+   4.2: 执行质量门禁前检查
+   5.1: 测试 core 功能
+   5.2: 测试 experience 功能
+   5.3: 测试 operation 功能
+
+规范变更:
+  - core (added)
+  - experience (added)
+  - operation (added)

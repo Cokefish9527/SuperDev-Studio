@@ -202,6 +202,9 @@ func New(cfg Config) (*App, error) {
 			PipelineLimit:  cfg.APIPipelineLimit,
 		},
 	})
+	if volcAdvisor.Enabled() {
+		apiServer.SetLLMAdvisor(volcAdvisor)
+	}
 
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,

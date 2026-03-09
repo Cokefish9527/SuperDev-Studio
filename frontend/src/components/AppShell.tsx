@@ -3,6 +3,7 @@ import {
   BookOutlined,
   DashboardOutlined,
   FolderOpenOutlined,
+  FormOutlined,
   SettingOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
@@ -19,6 +20,7 @@ const menuItems = [
   { key: '/', label: '工作台', icon: <DashboardOutlined /> },
   { key: '/projects', label: '工作区', icon: <FolderOpenOutlined /> },
   { key: '/changes', label: '变更中心', icon: <BookOutlined /> },
+  { key: '/simple', label: '简单交付', icon: <FormOutlined /> },
   { key: '/pipeline', label: '交付运行', icon: <ThunderboltOutlined /> },
   { key: '/context', label: '上下文中心', icon: <AppstoreOutlined /> },
   { key: '/settings', label: '项目设置', icon: <SettingOutlined /> },

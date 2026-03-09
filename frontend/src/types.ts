@@ -227,6 +227,50 @@ export type ContextPack = {
   knowledge: KnowledgeChunk[];
 };
 
+export type RequirementSession = {
+  id: string;
+  project_id: string;
+  title: string;
+  raw_input: string;
+  status: string;
+  latest_summary: string;
+  latest_prd: string;
+  latest_plan: string;
+  latest_risks: string;
+  latest_change_batch_id?: string;
+  latest_run_id?: string;
+  confirmed_at?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RequirementDocVersion = {
+  id: string;
+  session_id: string;
+  project_id: string;
+  type: string;
+  content: string;
+  version: number;
+  created_at: string;
+};
+
+export type RequirementConfirmation = {
+  id: string;
+  session_id: string;
+  project_id: string;
+  note: string;
+  created_at: string;
+};
+
+export type RequirementSessionBundle = {
+  session: RequirementSession;
+  doc_versions?: RequirementDocVersion[];
+  confirmation?: RequirementConfirmation;
+  run?: PipelineRun;
+  change_batch?: ChangeBatch;
+  delivery_error?: string;
+};
+
 export type DashboardResponse = {
   stats: {
     projects: number;

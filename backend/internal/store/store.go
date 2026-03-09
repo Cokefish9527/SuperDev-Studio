@@ -44,21 +44,30 @@ var allowedSchemaMutations = map[string]map[string]string{
 		"retry_of":             "TEXT NOT NULL DEFAULT ''",
 	},
 	"projects": {
-		"default_platform":          "TEXT NOT NULL DEFAULT 'web'",
-		"default_frontend":          "TEXT NOT NULL DEFAULT 'react'",
-		"default_backend":           "TEXT NOT NULL DEFAULT 'go'",
-		"default_domain":            "TEXT NOT NULL DEFAULT ''",
-		"default_agent_name":        "TEXT NOT NULL DEFAULT 'delivery-agent'",
-		"default_agent_mode":        "TEXT NOT NULL DEFAULT 'step_by_step'",
-		"default_context_mode":      "TEXT NOT NULL DEFAULT 'auto'",
+		"default_platform":             "TEXT NOT NULL DEFAULT 'web'",
+		"default_frontend":             "TEXT NOT NULL DEFAULT 'react'",
+		"default_backend":              "TEXT NOT NULL DEFAULT 'go'",
+		"default_domain":               "TEXT NOT NULL DEFAULT ''",
+		"default_agent_name":           "TEXT NOT NULL DEFAULT 'delivery-agent'",
+		"default_agent_mode":           "TEXT NOT NULL DEFAULT 'step_by_step'",
+		"default_context_mode":         "TEXT NOT NULL DEFAULT 'auto'",
 		"default_context_token_budget": "INTEGER NOT NULL DEFAULT 1200",
-		"default_context_max_items": "INTEGER NOT NULL DEFAULT 8",
-		"default_context_dynamic":   "INTEGER NOT NULL DEFAULT 1",
-		"default_memory_writeback":  "INTEGER NOT NULL DEFAULT 1",
+		"default_context_max_items":    "INTEGER NOT NULL DEFAULT 8",
+		"default_context_dynamic":      "INTEGER NOT NULL DEFAULT 1",
+		"default_memory_writeback":     "INTEGER NOT NULL DEFAULT 1",
 	},
 	"tasks": {
 		"start_date":     "TEXT",
 		"estimated_days": "INTEGER NOT NULL DEFAULT 0",
+	},
+	"requirement_sessions": {
+		"latest_summary":         "TEXT NOT NULL DEFAULT ''",
+		"latest_prd":             "TEXT NOT NULL DEFAULT ''",
+		"latest_plan":            "TEXT NOT NULL DEFAULT ''",
+		"latest_risks":           "TEXT NOT NULL DEFAULT ''",
+		"latest_change_batch_id": "TEXT NOT NULL DEFAULT ''",
+		"latest_run_id":          "TEXT NOT NULL DEFAULT ''",
+		"status":                 "TEXT NOT NULL DEFAULT 'draft'",
 	},
 }
 
@@ -278,12 +287,52 @@ func (s *Store) migrate(ctx context.Context) error {
 			FOREIGN KEY(document_id) REFERENCES knowledge_documents(id) ON DELETE CASCADE,
 			FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
 		);`,
+		`CREATE TABLE IF NOT EXISTS requirement_sessions (
+			id TEXT PRIMARY KEY,
+			project_id TEXT NOT NULL,
+			title TEXT NOT NULL DEFAULT '',
+			raw_input TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'draft',
+			latest_summary TEXT NOT NULL DEFAULT '',
+			latest_prd TEXT NOT NULL DEFAULT '',
+			latest_plan TEXT NOT NULL DEFAULT '',
+			latest_risks TEXT NOT NULL DEFAULT '',
+			latest_change_batch_id TEXT NOT NULL DEFAULT '',
+			latest_run_id TEXT NOT NULL DEFAULT '',
+			confirmed_at TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS requirement_doc_versions (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			project_id TEXT NOT NULL,
+			type TEXT NOT NULL,
+			content TEXT NOT NULL,
+			version INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL,
+			FOREIGN KEY(session_id) REFERENCES requirement_sessions(id) ON DELETE CASCADE,
+			FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS requirement_confirmations (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			project_id TEXT NOT NULL,
+			note TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			FOREIGN KEY(session_id) REFERENCES requirement_sessions(id) ON DELETE CASCADE,
+			FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+		);`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_change_batches_project_id ON change_batches(project_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_pipeline_runs_project_id ON pipeline_runs(project_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_memories_project_id ON memories(project_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_knowledge_documents_project_id ON knowledge_documents(project_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_project_id ON knowledge_chunks(project_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_requirement_sessions_project_id ON requirement_sessions(project_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_requirement_doc_versions_session_id ON requirement_doc_versions(session_id, version);`,
+		`CREATE INDEX IF NOT EXISTS idx_requirement_confirmations_session_id ON requirement_confirmations(session_id);`,
 	}
 
 	for _, stmt := range stmts {
@@ -1855,6 +1904,288 @@ func (s *Store) SearchKnowledge(ctx context.Context, projectID, query string, li
 		items = append(items, c)
 	}
 	return items, rows.Err()
+}
+
+func (s *Store) CreateRequirementSession(ctx context.Context, session RequirementSession) (RequirementSession, error) {
+	now := nowUTC()
+	if session.ID == "" {
+		session.ID = uuid.NewString()
+	}
+	if session.Title == "" {
+		session.Title = strings.TrimSpace(session.RawInput)
+	}
+	if session.Status == "" {
+		session.Status = "draft"
+	}
+	if session.CreatedAt.IsZero() {
+		session.CreatedAt = now
+	}
+	session.UpdatedAt = now
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO requirement_sessions(
+			id, project_id, title, raw_input, status,
+			latest_summary, latest_prd, latest_plan, latest_risks,
+			latest_change_batch_id, latest_run_id,
+			confirmed_at, created_at, updated_at
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		session.ID,
+		session.ProjectID,
+		session.Title,
+		session.RawInput,
+		session.Status,
+		session.LatestSummary,
+		session.LatestPRD,
+		session.LatestPlan,
+		session.LatestRisks,
+		session.LatestChangeBatchID,
+		session.LatestRunID,
+		nullableTime(session.ConfirmedAt),
+		formatTime(session.CreatedAt),
+		formatTime(session.UpdatedAt),
+	)
+	if err != nil {
+		return RequirementSession{}, err
+	}
+	return session, nil
+}
+
+func (s *Store) UpdateRequirementSession(ctx context.Context, session RequirementSession) error {
+	session.UpdatedAt = nowUTC()
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE requirement_sessions
+		 SET title=?, raw_input=?, status=?,
+		     latest_summary=?, latest_prd=?, latest_plan=?, latest_risks=?,
+		     latest_change_batch_id=?, latest_run_id=?,
+		     confirmed_at=?, updated_at=?
+		 WHERE id=?`,
+		session.Title,
+		session.RawInput,
+		session.Status,
+		session.LatestSummary,
+		session.LatestPRD,
+		session.LatestPlan,
+		session.LatestRisks,
+		session.LatestChangeBatchID,
+		session.LatestRunID,
+		nullableTime(session.ConfirmedAt),
+		formatTime(session.UpdatedAt),
+		session.ID,
+	)
+	return err
+}
+
+func (s *Store) AddRequirementDocVersion(ctx context.Context, version RequirementDocVersion) (RequirementDocVersion, error) {
+	if version.ID == "" {
+		version.ID = uuid.NewString()
+	}
+	if version.Version <= 0 {
+		version.Version = 1
+	}
+	if version.CreatedAt.IsZero() {
+		version.CreatedAt = nowUTC()
+	}
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO requirement_doc_versions(id, session_id, project_id, type, content, version, created_at)
+		 VALUES(?,?,?,?,?,?,?)`,
+		version.ID,
+		version.SessionID,
+		version.ProjectID,
+		version.Type,
+		version.Content,
+		version.Version,
+		formatTime(version.CreatedAt),
+	)
+	if err != nil {
+		return RequirementDocVersion{}, err
+	}
+	return version, nil
+}
+
+func (s *Store) CreateRequirementConfirmation(ctx context.Context, confirmation RequirementConfirmation) (RequirementConfirmation, error) {
+	if confirmation.ID == "" {
+		confirmation.ID = uuid.NewString()
+	}
+	if confirmation.CreatedAt.IsZero() {
+		confirmation.CreatedAt = nowUTC()
+	}
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO requirement_confirmations(id, session_id, project_id, note, created_at)
+		 VALUES(?,?,?,?,?)`,
+		confirmation.ID,
+		confirmation.SessionID,
+		confirmation.ProjectID,
+		confirmation.Note,
+		formatTime(confirmation.CreatedAt),
+	)
+	if err != nil {
+		return RequirementConfirmation{}, err
+	}
+	return confirmation, nil
+}
+
+func (s *Store) GetRequirementSession(ctx context.Context, id string) (RequirementSession, error) {
+	var r RequirementSession
+	var confirmedRaw sql.NullString
+	var createdRaw, updatedRaw string
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, project_id, title, raw_input, status,
+		        latest_summary, latest_prd, latest_plan, latest_risks,
+		        latest_change_batch_id, latest_run_id,
+		        confirmed_at, created_at, updated_at
+		   FROM requirement_sessions WHERE id=?`,
+		id,
+	).Scan(
+		&r.ID, &r.ProjectID, &r.Title, &r.RawInput, &r.Status,
+		&r.LatestSummary, &r.LatestPRD, &r.LatestPlan, &r.LatestRisks,
+		&r.LatestChangeBatchID, &r.LatestRunID,
+		&confirmedRaw, &createdRaw, &updatedRaw,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return RequirementSession{}, ErrNotFound
+		}
+		return RequirementSession{}, err
+	}
+	var parseErr error
+	r.CreatedAt, parseErr = parseTime(createdRaw)
+	if parseErr != nil {
+		return RequirementSession{}, parseErr
+	}
+	r.UpdatedAt, parseErr = parseTime(updatedRaw)
+	if parseErr != nil {
+		return RequirementSession{}, parseErr
+	}
+	if confirmedRaw.Valid && strings.TrimSpace(confirmedRaw.String) != "" {
+		if ts, err := parseTime(confirmedRaw.String); err == nil {
+			r.ConfirmedAt = &ts
+		}
+	}
+	return r, nil
+}
+
+func (s *Store) ListRequirementSessions(ctx context.Context, projectID string, limit int) ([]RequirementSession, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, project_id, title, raw_input, status,
+		        latest_summary, latest_prd, latest_plan, latest_risks,
+		        latest_change_batch_id, latest_run_id,
+		        confirmed_at, created_at, updated_at
+		   FROM requirement_sessions
+		   WHERE project_id=? ORDER BY created_at DESC LIMIT ?`,
+		projectID,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RequirementSession{}
+	for rows.Next() {
+		var r RequirementSession
+		var confirmedRaw sql.NullString
+		var createdRaw, updatedRaw string
+		if err := rows.Scan(
+			&r.ID, &r.ProjectID, &r.Title, &r.RawInput, &r.Status,
+			&r.LatestSummary, &r.LatestPRD, &r.LatestPlan, &r.LatestRisks,
+			&r.LatestChangeBatchID, &r.LatestRunID,
+			&confirmedRaw, &createdRaw, &updatedRaw,
+		); err != nil {
+			return nil, err
+		}
+		var parseErr error
+		r.CreatedAt, parseErr = parseTime(createdRaw)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		r.UpdatedAt, parseErr = parseTime(updatedRaw)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		if confirmedRaw.Valid && strings.TrimSpace(confirmedRaw.String) != "" {
+			if ts, err := parseTime(confirmedRaw.String); err == nil {
+				r.ConfirmedAt = &ts
+			}
+		}
+		items = append(items, r)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) ListRequirementDocVersions(ctx context.Context, sessionID string) ([]RequirementDocVersion, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, session_id, project_id, type, content, version, created_at
+		   FROM requirement_doc_versions
+		   WHERE session_id=?
+		   ORDER BY version DESC, created_at DESC`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RequirementDocVersion{}
+	for rows.Next() {
+		var v RequirementDocVersion
+		var createdRaw string
+		if err := rows.Scan(&v.ID, &v.SessionID, &v.ProjectID, &v.Type, &v.Content, &v.Version, &createdRaw); err != nil {
+			return nil, err
+		}
+		parsed, parseErr := parseTime(createdRaw)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		v.CreatedAt = parsed
+		items = append(items, v)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) GetLatestRequirementConfirmation(ctx context.Context, sessionID string) (RequirementConfirmation, error) {
+	var c RequirementConfirmation
+	var createdRaw string
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, session_id, project_id, note, created_at
+		   FROM requirement_confirmations
+		   WHERE session_id=?
+		   ORDER BY created_at DESC LIMIT 1`,
+		sessionID,
+	).Scan(&c.ID, &c.SessionID, &c.ProjectID, &c.Note, &createdRaw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return RequirementConfirmation{}, ErrNotFound
+		}
+		return RequirementConfirmation{}, err
+	}
+	parsed, err := parseTime(createdRaw)
+	if err != nil {
+		return RequirementConfirmation{}, err
+	}
+	c.CreatedAt = parsed
+	return c, nil
+}
+
+func (s *Store) NextRequirementDocVersion(ctx context.Context, sessionID, docType string) (int, error) {
+	var maxVersion sql.NullInt64
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT MAX(version) FROM requirement_doc_versions WHERE session_id=? AND type=?`,
+		sessionID,
+		docType,
+	).Scan(&maxVersion); err != nil {
+		return 0, err
+	}
+	if !maxVersion.Valid {
+		return 1, nil
+	}
+	return int(maxVersion.Int64) + 1, nil
 }
 
 func (s *Store) DashboardStats(ctx context.Context, projectID string) (map[string]int, error) {

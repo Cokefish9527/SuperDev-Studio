@@ -28,6 +28,7 @@ type Server struct {
 	store       *store.Store
 	pipeline    *pipeline.Manager
 	contextOpt  *contextopt.Service
+	llmAdvisor  pipeline.LLMAdvisor
 	config      ServerConfig
 	rateLimiter *slidingWindowRateLimiter
 }
@@ -42,6 +43,10 @@ func NewServerWithConfig(s *store.Store, p *pipeline.Manager, c *contextopt.Serv
 		limiter = newSlidingWindowRateLimiter(cfg.RateLimit.Window)
 	}
 	return &Server{store: s, pipeline: p, contextOpt: c, config: cfg, rateLimiter: limiter}
+}
+
+func (s *Server) SetLLMAdvisor(advisor pipeline.LLMAdvisor) {
+	s.llmAdvisor = advisor
 }
 
 func (s *Server) Router() http.Handler {
@@ -74,6 +79,10 @@ func (s *Server) Router() http.Handler {
 		r.With(s.rateLimit(s.expensivePolicy("projects:advance"))).Post("/{projectID}/advance", s.handleAdvanceProject)
 		r.Get("/{projectID}/change-batches", s.handleListChangeBatches)
 		r.Get("/{projectID}/agent-bundle", s.handleGetProjectAgentBundle)
+		r.With(s.rateLimit(s.expensivePolicy("requirements:create"))).Post("/{projectID}/requirement-sessions", s.handleCreateRequirementSession)
+		r.Get("/{projectID}/requirement-sessions/{sessionID}", s.handleGetRequirementSession)
+		r.With(s.rateLimit(s.mutationPolicy("requirements:revise"))).Post("/{projectID}/requirement-sessions/{sessionID}/revise", s.handleReviseRequirementSession)
+		r.With(s.rateLimit(s.mutationPolicy("requirements:confirm"))).Post("/{projectID}/requirement-sessions/{sessionID}/confirm", s.handleConfirmRequirementSession)
 		r.With(s.rateLimit(s.mutationPolicy("change-batches:create"))).Post("/{projectID}/change-batches", s.handleCreateChangeBatch)
 		r.Get("/{projectID}/memories", s.handleListMemories)
 		r.With(s.rateLimit(s.mutationPolicy("memories:create"))).Post("/{projectID}/memories", s.handleCreateMemory)
@@ -179,6 +188,133 @@ func parseOptionalDate(raw *string) (*time.Time, error) {
 	return &value, nil
 }
 
+func trimSnippet(raw string, limit int) string {
+	trimmed := strings.TrimSpace(raw)
+	if limit <= 0 || len([]rune(trimmed)) <= limit {
+		return trimmed
+	}
+	runes := []rune(trimmed)
+	return string(runes[:limit])
+}
+
+func generateRequirementDrafts(raw string) (string, string, string, string) {
+	clean := strings.TrimSpace(raw)
+	if clean == "" {
+		clean = "????????"
+	}
+	summary := fmt.Sprintf("?????\n- %s", clean)
+	prd := fmt.Sprintf("# PRD ??\n\n## ??\n%s\n\n## ????\n- ???\n\n## ????\n- ???\n\n## ??\n- ???", clean)
+	plan := "???????\n1) ????\n2) ????\n3) ????\n4) ????\n5) ??/????"
+	risks := "????????\n- ????????\n- ????????\n- ???????"
+	return summary, prd, plan, risks
+}
+
+type requirementDraftSet struct {
+	Summary string `json:"summary"`
+	PRD     string `json:"prd"`
+	Plan    string `json:"plan"`
+	Risks   string `json:"risks"`
+}
+
+func fallbackRequirementDrafts(raw string) requirementDraftSet {
+	summary, prd, plan, risks := generateRequirementDrafts(raw)
+	return requirementDraftSet{Summary: summary, PRD: prd, Plan: plan, Risks: risks}
+}
+
+func (s *Server) buildRequirementDrafts(ctx context.Context, raw string) requirementDraftSet {
+	fallback := fallbackRequirementDrafts(raw)
+	if s.llmAdvisor == nil {
+		return fallback
+	}
+	prompt := strings.TrimSpace(fmt.Sprintf(
+		"???????????????????????? JSON????????????"+
+			"\n???????%s"+
+			"\n?????\n"+
+			"1. ??? JSON ????? markdown??????\n"+
+			"2. ????? summary?prd?plan?risks?\n"+
+			"3. summary ? 4-6 ????\n"+
+			"4. prd ? Markdown???????????????????????\n"+
+			"5. plan ? Markdown???? 5-8 ??????\n"+
+			"6. risks ? Markdown????????????????",
+		strings.TrimSpace(raw),
+	))
+	answer, err := s.llmAdvisor.Advise(ctx, prompt)
+	if err != nil {
+		return fallback
+	}
+	parsed, err := parseRequirementDraftSet(answer)
+	if err != nil {
+		return fallback
+	}
+	return requirementDraftSet{
+		Summary: firstNonEmpty(parsed.Summary, fallback.Summary),
+		PRD:     firstNonEmpty(parsed.PRD, fallback.PRD),
+		Plan:    firstNonEmpty(parsed.Plan, fallback.Plan),
+		Risks:   firstNonEmpty(parsed.Risks, fallback.Risks),
+	}
+}
+
+func parseRequirementDraftSet(raw string) (requirementDraftSet, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return requirementDraftSet{}, errors.New("empty requirement draft response")
+	}
+	if strings.Contains(trimmed, "```") {
+		parts := strings.Split(trimmed, "```")
+		for _, part := range parts {
+			candidate := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(part), "json"))
+			if strings.HasPrefix(candidate, "{") {
+				trimmed = candidate
+				break
+			}
+		}
+	}
+	start := strings.Index(trimmed, "{")
+	end := strings.LastIndex(trimmed, "}")
+	if start >= 0 && end > start {
+		trimmed = strings.TrimSpace(trimmed[start : end+1])
+	}
+	var draft requirementDraftSet
+	if err := json.Unmarshal([]byte(trimmed), &draft); err != nil {
+		return requirementDraftSet{}, err
+	}
+	if firstNonEmpty(draft.Summary, draft.PRD, draft.Plan, draft.Risks) == "" {
+		return requirementDraftSet{}, errors.New("empty requirement draft payload")
+	}
+	return draft, nil
+}
+
+func (s *Server) appendRequirementDraftVersions(ctx context.Context, projectID, sessionID string, drafts requirementDraftSet) ([]store.RequirementDocVersion, error) {
+	items := []struct {
+		docType string
+		content string
+	}{
+		{docType: "summary", content: drafts.Summary},
+		{docType: "prd", content: drafts.PRD},
+		{docType: "plan", content: drafts.Plan},
+		{docType: "risks", content: drafts.Risks},
+	}
+	versions := make([]store.RequirementDocVersion, 0, len(items))
+	for _, item := range items {
+		version, err := s.store.NextRequirementDocVersion(ctx, sessionID, item.docType)
+		if err != nil {
+			return nil, err
+		}
+		doc, err := s.store.AddRequirementDocVersion(ctx, store.RequirementDocVersion{
+			SessionID: sessionID,
+			ProjectID: projectID,
+			Type:      item.docType,
+			Content:   item.content,
+			Version:   version,
+		})
+		if err != nil {
+			return nil, err
+		}
+		versions = append(versions, doc)
+	}
+	return versions, nil
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -225,6 +361,29 @@ type createProjectRequest struct {
 	DefaultContextMaxItems    int    `json:"default_context_max_items"`
 	DefaultContextDynamic     *bool  `json:"default_context_dynamic"`
 	DefaultMemoryWriteback    *bool  `json:"default_memory_writeback"`
+}
+
+type requirementSessionResponse struct {
+	Session       store.RequirementSession       `json:"session"`
+	DocVersions   []store.RequirementDocVersion  `json:"doc_versions,omitempty"`
+	Confirmation  *store.RequirementConfirmation `json:"confirmation,omitempty"`
+	Run           *store.PipelineRun             `json:"run,omitempty"`
+	ChangeBatch   *store.ChangeBatch             `json:"change_batch,omitempty"`
+	DeliveryError string                         `json:"delivery_error,omitempty"`
+}
+
+type createRequirementSessionRequest struct {
+	Title    string `json:"title"`
+	RawInput string `json:"raw_input"`
+}
+
+type reviseRequirementSessionRequest struct {
+	Title    string `json:"title"`
+	RawInput string `json:"raw_input"`
+}
+
+type confirmRequirementSessionRequest struct {
+	Note string `json:"note"`
 }
 
 func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
@@ -336,6 +495,218 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, project)
+}
+
+func (s *Server) handleCreateRequirementSession(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	if _, err := s.store.GetProject(r.Context(), projectID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			respondError(w, http.StatusNotFound, err)
+			return
+		}
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	var req createRequirementSessionRequest
+	if err := decodeJSON(r, &req); err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	raw := strings.TrimSpace(req.RawInput)
+	if raw == "" {
+		respondError(w, http.StatusBadRequest, errors.New("raw_input is required"))
+		return
+	}
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = firstNonEmpty(trimSnippet(raw, 48), "需求会话")
+	}
+	drafts := s.buildRequirementDrafts(r.Context(), raw)
+	session, err := s.store.CreateRequirementSession(r.Context(), store.RequirementSession{
+		ProjectID:     projectID,
+		Title:         title,
+		RawInput:      raw,
+		Status:        "awaiting_confirm",
+		LatestSummary: drafts.Summary,
+		LatestPRD:     drafts.PRD,
+		LatestPlan:    drafts.Plan,
+		LatestRisks:   drafts.Risks,
+	})
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	docVersions, err := s.appendRequirementDraftVersions(r.Context(), projectID, session.ID, drafts)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	respondJSON(w, http.StatusCreated, requirementSessionResponse{
+		Session:     session,
+		DocVersions: docVersions,
+	})
+}
+
+func (s *Server) handleGetRequirementSession(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	sessionID := chi.URLParam(r, "sessionID")
+	session, err := s.store.GetRequirementSession(r.Context(), sessionID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			respondError(w, http.StatusNotFound, err)
+			return
+		}
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if session.ProjectID != projectID {
+		respondError(w, http.StatusNotFound, errors.New("session not found in project"))
+		return
+	}
+	docs, docErr := s.store.ListRequirementDocVersions(r.Context(), sessionID)
+	if docErr != nil {
+		respondError(w, http.StatusInternalServerError, docErr)
+		return
+	}
+	confirmation, confErr := s.store.GetLatestRequirementConfirmation(r.Context(), sessionID)
+	var confirmationPtr *store.RequirementConfirmation
+	if confErr == nil {
+		confirmationPtr = &confirmation
+	} else if !errors.Is(confErr, store.ErrNotFound) {
+		respondError(w, http.StatusInternalServerError, confErr)
+		return
+	}
+	respondJSON(w, http.StatusOK, requirementSessionResponse{
+		Session:      session,
+		DocVersions:  docs,
+		Confirmation: confirmationPtr,
+	})
+}
+
+func (s *Server) handleReviseRequirementSession(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	sessionID := chi.URLParam(r, "sessionID")
+	session, err := s.store.GetRequirementSession(r.Context(), sessionID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			respondError(w, http.StatusNotFound, err)
+			return
+		}
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if session.ProjectID != projectID {
+		respondError(w, http.StatusNotFound, errors.New("session not found in project"))
+		return
+	}
+	var req reviseRequirementSessionRequest
+	if err := decodeJSON(r, &req); err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	raw := strings.TrimSpace(req.RawInput)
+	if raw == "" {
+		raw = session.RawInput
+	}
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = session.Title
+	}
+	drafts := s.buildRequirementDrafts(r.Context(), raw)
+	session.RawInput = raw
+	session.Title = title
+	session.Status = "awaiting_confirm"
+	session.LatestSummary = drafts.Summary
+	session.LatestPRD = drafts.PRD
+	session.LatestPlan = drafts.Plan
+	session.LatestRisks = drafts.Risks
+	session.LatestChangeBatchID = ""
+	session.LatestRunID = ""
+	session.ConfirmedAt = nil
+	if err := s.store.UpdateRequirementSession(r.Context(), session); err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	docVersions, err := s.appendRequirementDraftVersions(r.Context(), projectID, session.ID, drafts)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, requirementSessionResponse{
+		Session:     session,
+		DocVersions: docVersions,
+	})
+}
+
+func (s *Server) handleConfirmRequirementSession(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	sessionID := chi.URLParam(r, "sessionID")
+	session, err := s.store.GetRequirementSession(r.Context(), sessionID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			respondError(w, http.StatusNotFound, err)
+			return
+		}
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if session.ProjectID != projectID {
+		respondError(w, http.StatusNotFound, errors.New("session not found in project"))
+		return
+	}
+	var req confirmRequirementSessionRequest
+	if err := decodeJSON(r, &req); err != nil && !errors.Is(err, io.EOF) {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+	now := time.Now().UTC()
+	session.Status = "confirmed"
+	session.ConfirmedAt = &now
+	if err := s.store.UpdateRequirementSession(r.Context(), session); err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	confirmation, confErr := s.store.CreateRequirementConfirmation(r.Context(), store.RequirementConfirmation{
+		SessionID: session.ID,
+		ProjectID: projectID,
+		Note:      strings.TrimSpace(req.Note),
+		CreatedAt: now,
+	})
+	if confErr != nil {
+		respondError(w, http.StatusInternalServerError, confErr)
+		return
+	}
+	project, projectErr := s.store.GetProject(r.Context(), projectID)
+	if projectErr != nil {
+		respondError(w, http.StatusInternalServerError, projectErr)
+		return
+	}
+	advanceResp, _, advanceErr := s.startProjectAdvance(r, project, advanceProjectRequest{
+		Goal: session.RawInput,
+		Mode: defaultAdvanceModeForProject(project),
+	})
+	deliveryError := ""
+	var runPtr *store.PipelineRun
+	var changeBatchPtr *store.ChangeBatch
+	if advanceErr == nil {
+		runPtr = &advanceResp.Run
+		changeBatchPtr = advanceResp.ChangeBatch
+		session.LatestChangeBatchID = advanceResp.ChangeBatch.ID
+		session.LatestRunID = advanceResp.Run.ID
+		if err := s.store.UpdateRequirementSession(r.Context(), session); err != nil {
+			respondError(w, http.StatusInternalServerError, err)
+			return
+		}
+	} else {
+		deliveryError = advanceErr.Error()
+	}
+	respondJSON(w, http.StatusOK, requirementSessionResponse{
+		Session:       session,
+		Confirmation:  &confirmation,
+		Run:           runPtr,
+		ChangeBatch:   changeBatchPtr,
+		DeliveryError: deliveryError,
+	})
 }
 
 func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
@@ -538,54 +909,54 @@ func (s *Server) handleAdvanceProject(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	resp, statusCode, err := s.startProjectAdvance(r, project, req)
+	if err != nil {
+		respondError(w, statusCode, err)
+		return
+	}
+	respondJSON(w, statusCode, resp)
+}
+
+func defaultAdvanceModeForProject(project store.Project) string {
+	if strings.EqualFold(strings.TrimSpace(project.DefaultAgentMode), advanceModeFullCycle) {
+		return advanceModeFullCycle
+	}
+	return advanceModeStepByStep
+}
+
+func (s *Server) startProjectAdvance(r *http.Request, project store.Project, req advanceProjectRequest) (advanceProjectResponse, int, error) {
 	mode, modeErr := parseAdvanceMode(req.Mode)
 	if modeErr != nil {
-		respondError(w, http.StatusBadRequest, modeErr)
-		return
+		return advanceProjectResponse{}, http.StatusBadRequest, modeErr
 	}
 	iterationLimit := req.IterationLimit
 	if iterationLimit <= 0 {
 		iterationLimit = 3
 	}
-
-	mem, memoryWritten, err := s.ensureSuperDevUsageMemory(r.Context(), projectID)
+	ctx := r.Context()
+	mem, memoryWritten, err := s.ensureSuperDevUsageMemory(ctx, project.ID)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
+		return advanceProjectResponse{}, http.StatusInternalServerError, err
 	}
-
-	tasks, err := s.store.ListTasks(r.Context(), projectID)
+	tasks, err := s.store.ListTasks(ctx, project.ID)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
+		return advanceProjectResponse{}, http.StatusInternalServerError, err
 	}
 	prompt := buildProjectAdvancePrompt(project, tasks, req.Goal)
-	changeBatch, err := s.store.CreateChangeBatch(r.Context(), store.ChangeBatch{
-		ProjectID: projectID,
+	changeBatch, err := s.store.CreateChangeBatch(ctx, store.ChangeBatch{
+		ProjectID: project.ID,
 		Title:     buildChangeBatchTitle(project.Name, req.Goal, mode),
 		Goal:      strings.TrimSpace(req.Goal),
 		Mode:      mode,
 		Status:    "queued",
 	})
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
+		return advanceProjectResponse{}, http.StatusInternalServerError, err
 	}
-
-	platform := strings.TrimSpace(req.Platform)
-	if platform == "" {
-		platform = strings.TrimSpace(project.DefaultPlatform)
-	}
-	frontend := strings.TrimSpace(req.Frontend)
-	if frontend == "" {
-		frontend = strings.TrimSpace(project.DefaultFrontend)
-	}
-	backendValue := strings.TrimSpace(req.Backend)
-	if backendValue == "" {
-		backendValue = strings.TrimSpace(project.DefaultBackend)
-	}
-
-	projectDir := s.resolveProjectDirForAdvance(r.Context(), projectID, project.RepoPath)
+	platform := firstNonEmpty(strings.TrimSpace(req.Platform), strings.TrimSpace(project.DefaultPlatform))
+	frontend := firstNonEmpty(strings.TrimSpace(req.Frontend), strings.TrimSpace(project.DefaultFrontend))
+	backendValue := firstNonEmpty(strings.TrimSpace(req.Backend), strings.TrimSpace(project.DefaultBackend))
+	projectDir := s.resolveProjectDirForAdvance(ctx, project.ID, project.RepoPath)
 	preferredLifecycleMode := func() string {
 		if mode == advanceModeFullCycle {
 			return advanceModeFullCycle
@@ -603,11 +974,10 @@ func (s *Server) handleAdvanceProject(w http.ResponseWriter, r *http.Request) {
 		resolveProjectLifecycleMode(project, project.DefaultAgentMode, preferredLifecycleMode, ""),
 	)
 	if selectionErr != nil {
-		respondError(w, http.StatusBadRequest, selectionErr)
-		return
+		return advanceProjectResponse{}, http.StatusBadRequest, selectionErr
 	}
 	startReq := pipeline.StartRequest{
-		ProjectID:     projectID,
+		ProjectID:     project.ID,
 		ChangeBatchID: changeBatch.ID,
 		Prompt:        prompt,
 		Simulate:      false,
@@ -637,26 +1007,23 @@ func (s *Server) handleAdvanceProject(w http.ResponseWriter, r *http.Request) {
 			Domain:     firstNonEmpty(strings.TrimSpace(req.Domain), strings.TrimSpace(project.DefaultDomain)),
 		},
 	}
-
-	run, err := s.pipeline.Start(r.Context(), startReq)
+	run, err := s.pipeline.Start(ctx, startReq)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, err)
-		return
+		return advanceProjectResponse{}, http.StatusInternalServerError, err
 	}
-	_, _ = s.store.AppendRunEvent(r.Context(), store.RunEvent{
+	_, _ = s.store.AppendRunEvent(ctx, store.RunEvent{
 		RunID:   run.ID,
 		Stage:   "advance",
 		Status:  "log",
 		Message: fmt.Sprintf("Task board advance triggered, mode=%s, memory_written=%t", mode, memoryWritten),
 	})
-
-	respondJSON(w, http.StatusAccepted, advanceProjectResponse{
+	return advanceProjectResponse{
 		Run:           run,
 		Mode:          mode,
 		MemoryWritten: memoryWritten,
 		MemoryID:      mem.ID,
 		ChangeBatch:   &changeBatch,
-	})
+	}, http.StatusAccepted, nil
 }
 
 type updateTaskRequest struct {

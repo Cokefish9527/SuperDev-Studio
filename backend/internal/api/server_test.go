@@ -37,6 +37,7 @@ func (f *fakeRunner) RunCommand(_ context.Context, _ pipeline.RunRequest, comman
 
 type apiTestEnv struct {
 	handler  http.Handler
+	server   *Server
 	store    *store.Store
 	pipeline *pipeline.Manager
 }
@@ -56,8 +57,10 @@ func newAPITestEnvWithConfig(t *testing.T, cfg ServerConfig) apiTestEnv {
 	co := contextopt.NewService(s)
 	pm := pipeline.NewManager(s, &fakeRunner{}, co)
 	pm.SetPhaseDelay(5 * time.Millisecond)
+	server := NewServerWithConfig(s, pm, co, cfg)
 	return apiTestEnv{
-		handler:  NewServerWithConfig(s, pm, co, cfg).Router(),
+		handler:  server.Router(),
+		server:   server,
 		store:    s,
 		pipeline: pm,
 	}
@@ -77,6 +80,18 @@ type scriptedAgentRuntime struct {
 	mu              sync.Mutex
 	evaluateVerdict []string
 	evaluateIndex   int
+}
+
+type fixedAdvisor struct {
+	answer string
+	err    error
+}
+
+func (f fixedAdvisor) Advise(_ context.Context, _ string) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.answer, nil
 }
 
 func newScriptedAgentRuntime(s *store.Store, verdicts ...string) *scriptedAgentRuntime {
@@ -1666,5 +1681,158 @@ func TestStepByStepNeedHumanCanResume(t *testing.T) {
 	}
 	if !foundResume {
 		t.Fatalf("expected resume event referencing previous run %s; events=%v", run.ID, events)
+	}
+}
+
+func TestRequirementSessionLifecycleStartsDelivery(t *testing.T) {
+	env := newAPITestEnv(t)
+	project := createProjectViaAPI(t, env.handler, "RequirementFlow")
+
+	createPayload, _ := json.Marshal(map[string]string{
+		"raw_input": "????????????????????????",
+	})
+	createReq := httptest.NewRequest(http.MethodPost, "/api/projects/"+project.ID+"/requirement-sessions", bytes.NewReader(createPayload))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRes := httptest.NewRecorder()
+	env.handler.ServeHTTP(createRes, createReq)
+	if createRes.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", createRes.Code, createRes.Body.String())
+	}
+	var created struct {
+		Session     store.RequirementSession      `json:"session"`
+		DocVersions []store.RequirementDocVersion `json:"doc_versions"`
+	}
+	if err := json.Unmarshal(createRes.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create requirement session: %v", err)
+	}
+	if created.Session.Status != "awaiting_confirm" {
+		t.Fatalf("expected awaiting_confirm, got %s", created.Session.Status)
+	}
+	if len(created.DocVersions) != 4 {
+		t.Fatalf("expected 4 draft docs, got %d", len(created.DocVersions))
+	}
+
+	revisePayload, _ := json.Marshal(map[string]string{
+		"title":     "??????????",
+		"raw_input": "?????????????????????????????",
+	})
+	reviseReq := httptest.NewRequest(http.MethodPost, "/api/projects/"+project.ID+"/requirement-sessions/"+created.Session.ID+"/revise", bytes.NewReader(revisePayload))
+	reviseReq.Header.Set("Content-Type", "application/json")
+	reviseRes := httptest.NewRecorder()
+	env.handler.ServeHTTP(reviseRes, reviseReq)
+	if reviseRes.Code != http.StatusOK {
+		t.Fatalf("expected revise 200, got %d: %s", reviseRes.Code, reviseRes.Body.String())
+	}
+	var revised struct {
+		Session     store.RequirementSession      `json:"session"`
+		DocVersions []store.RequirementDocVersion `json:"doc_versions"`
+	}
+	if err := json.Unmarshal(reviseRes.Body.Bytes(), &revised); err != nil {
+		t.Fatalf("decode revise requirement session: %v", err)
+	}
+	if revised.Session.Title != "??????????" {
+		t.Fatalf("expected revised title to persist, got %q", revised.Session.Title)
+	}
+	if len(revised.DocVersions) != 4 {
+		t.Fatalf("expected revised draft docs, got %d", len(revised.DocVersions))
+	}
+
+	confirmPayload, _ := json.Marshal(map[string]string{"note": "??????"})
+	confirmReq := httptest.NewRequest(http.MethodPost, "/api/projects/"+project.ID+"/requirement-sessions/"+created.Session.ID+"/confirm", bytes.NewReader(confirmPayload))
+	confirmReq.Header.Set("Content-Type", "application/json")
+	confirmRes := httptest.NewRecorder()
+	env.handler.ServeHTTP(confirmRes, confirmReq)
+	if confirmRes.Code != http.StatusOK {
+		t.Fatalf("expected confirm 200, got %d: %s", confirmRes.Code, confirmRes.Body.String())
+	}
+	var confirmed struct {
+		Session       store.RequirementSession       `json:"session"`
+		Confirmation  *store.RequirementConfirmation `json:"confirmation"`
+		Run           *store.PipelineRun             `json:"run"`
+		ChangeBatch   *store.ChangeBatch             `json:"change_batch"`
+		DeliveryError string                         `json:"delivery_error"`
+	}
+	if err := json.Unmarshal(confirmRes.Body.Bytes(), &confirmed); err != nil {
+		t.Fatalf("decode confirm requirement session: %v", err)
+	}
+	if confirmed.Session.Status != "confirmed" {
+		t.Fatalf("expected confirmed status, got %s", confirmed.Session.Status)
+	}
+	if confirmed.Confirmation == nil {
+		t.Fatalf("expected confirmation record")
+	}
+	if confirmed.DeliveryError != "" {
+		t.Fatalf("unexpected delivery error: %s", confirmed.DeliveryError)
+	}
+	if confirmed.Run == nil {
+		t.Fatalf("expected auto-started pipeline run")
+	}
+	if confirmed.ChangeBatch == nil {
+		t.Fatalf("expected auto-created change batch")
+	}
+	if confirmed.Session.LatestRunID != confirmed.Run.ID {
+		t.Fatalf("expected session latest_run_id to match run id")
+	}
+	if confirmed.Session.LatestChangeBatchID != confirmed.ChangeBatch.ID {
+		t.Fatalf("expected session latest_change_batch_id to match change batch id")
+	}
+	stored, err := env.store.GetRequirementSession(context.Background(), created.Session.ID)
+	if err != nil {
+		t.Fatalf("get stored requirement session: %v", err)
+	}
+	if stored.LatestRunID != confirmed.Run.ID {
+		t.Fatalf("stored latest_run_id mismatch: %s vs %s", stored.LatestRunID, confirmed.Run.ID)
+	}
+	if stored.LatestChangeBatchID != confirmed.ChangeBatch.ID {
+		t.Fatalf("stored latest_change_batch_id mismatch: %s vs %s", stored.LatestChangeBatchID, confirmed.ChangeBatch.ID)
+	}
+	completedRun := waitForRunCompletion(t, env.store, confirmed.Run.ID)
+	if completedRun.ChangeBatchID != confirmed.ChangeBatch.ID {
+		t.Fatalf("expected run change batch %s, got %s", confirmed.ChangeBatch.ID, completedRun.ChangeBatchID)
+	}
+}
+
+func TestCreateRequirementSessionUsesLLMDrafts(t *testing.T) {
+	env := newAPITestEnv(t)
+	env.server.SetLLMAdvisor(fixedAdvisor{answer: `{"summary":"LLM summary","prd":"# LLM PRD","plan":"1. LLM plan","risks":"- LLM risk"}`})
+	project := createProjectViaAPI(t, env.handler, "RequirementLLM")
+
+	payload, _ := json.Marshal(map[string]string{
+		"raw_input": "build a timeline and knowledge-graph notebook",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/"+project.ID+"/requirement-sessions", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	env.handler.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", res.Code, res.Body.String())
+	}
+	var response struct {
+		Session     store.RequirementSession      `json:"session"`
+		DocVersions []store.RequirementDocVersion `json:"doc_versions"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode llm requirement session: %v", err)
+	}
+	if response.Session.LatestSummary != "LLM summary" {
+		t.Fatalf("expected LLM summary, got %q", response.Session.LatestSummary)
+	}
+	if response.Session.LatestPRD != "# LLM PRD" {
+		t.Fatalf("expected LLM prd, got %q", response.Session.LatestPRD)
+	}
+	if response.Session.LatestPlan != "1. LLM plan" {
+		t.Fatalf("expected LLM plan, got %q", response.Session.LatestPlan)
+	}
+	if response.Session.LatestRisks != "- LLM risk" {
+		t.Fatalf("expected LLM risks, got %q", response.Session.LatestRisks)
+	}
+	foundSummary := false
+	for _, doc := range response.DocVersions {
+		if doc.Type == "summary" && doc.Content == "LLM summary" {
+			foundSummary = true
+		}
+	}
+	if !foundSummary {
+		t.Fatalf("expected summary doc version to use LLM draft")
 	}
 }

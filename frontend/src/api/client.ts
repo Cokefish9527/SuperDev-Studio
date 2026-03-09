@@ -16,6 +16,7 @@ import type {
   PipelineRun,
   Project,
   ProjectAgentBundle,
+  RequirementSessionBundle,
   RunEvent,
   Task,
 } from '../types';
@@ -131,6 +132,25 @@ export const apiClient = {
     projectId: string,
     payload: { query: string; token_budget?: number; max_items?: number },
   ) => (await api.post<ContextPack>(`/api/projects/${projectId}/context-pack`, payload)).data,
+
+  createRequirementSession: async (projectId: string, payload: { title?: string; raw_input: string }) =>
+    (await api.post<RequirementSessionBundle>(`/api/projects/${projectId}/requirement-sessions`, payload)).data,
+  getRequirementSession: async (projectId: string, sessionId: string) =>
+    (await api.get<RequirementSessionBundle>(`/api/projects/${projectId}/requirement-sessions/${sessionId}`)).data,
+  reviseRequirementSession: async (projectId: string, sessionId: string, payload: { title?: string; raw_input?: string }) =>
+    (
+      await api.post<RequirementSessionBundle>(
+        `/api/projects/${projectId}/requirement-sessions/${sessionId}/revise`,
+        payload,
+      )
+    ).data,
+  confirmRequirementSession: async (projectId: string, sessionId: string, payload?: { note?: string }) =>
+    (
+      await api.post<RequirementSessionBundle>(
+        `/api/projects/${projectId}/requirement-sessions/${sessionId}/confirm`,
+        payload ?? {},
+      )
+    ).data,
 
   startPipeline: async (payload: {
     project_id: string;

@@ -1,0 +1,11 @@
+PS d:\Work\agent-demo\SuperDev-Studio\output\sop-demo\timeline-knowledge-notebook> super-dev quality --type all
+
+运行质量检查: all
+  场景: 1-N+1 增量开发
+  未通过 总分: 41/100
+  ✓ 报告: 
+d:\Work\agent-demo\SuperDev-Studio\output\sop-demo\timeline-knowledge-notebook\
+output\my-project-quality-gate.md
+关键失败项:
+  -  产品需求文档存在性
+  -  架构设计文档存在性

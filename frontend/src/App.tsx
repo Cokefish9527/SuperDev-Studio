@@ -9,6 +9,7 @@ const ChangeCenterPage = lazy(() => import('./pages/ChangeCenterPage'));
 const PipelinePage = lazy(() => import('./pages/PipelinePage'));
 const ProjectSettingsPage = lazy(() => import('./pages/ProjectSettingsPage'));
 const ContextHubPage = lazy(() => import('./pages/ContextHubPage'));
+const SimpleDeliveryPage = lazy(() => import('./pages/SimpleDeliveryPage'));
 
 function PageFallback() {
   return (
@@ -33,6 +34,7 @@ export default function App() {
         <Route path="/" element={renderLazyPage(DashboardPage)} />
         <Route path="/projects" element={renderLazyPage(ProjectsPage)} />
         <Route path="/changes" element={renderLazyPage(ChangeCenterPage)} />
+        <Route path="/simple" element={renderLazyPage(SimpleDeliveryPage)} />
         <Route path="/pipeline" element={renderLazyPage(PipelinePage)} />
         <Route path="/settings" element={renderLazyPage(ProjectSettingsPage)} />
         <Route path="/context" element={renderLazyPage(ContextHubPage)} />

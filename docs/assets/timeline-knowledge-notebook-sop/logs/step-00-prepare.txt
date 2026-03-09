@@ -1,0 +1,10 @@
+PS d:\Work\agent-demo\SuperDev-Studio> New-Item -ItemType Directory -Force -Path output\sop-demo\timeline-knowledge-notebook, docs\assets\timeline-knowledge-notebook-sop, docs\assets\timeline-knowledge-notebook-sop\logs
+
+
+FullName                                                                           
+--------                                                                           
+D:\Work\agent-demo\SuperDev-Studio\output\sop-demo\timeline-knowledge-notebook     
+D:\Work\agent-demo\SuperDev-Studio\docs\assets\timeline-knowledge-notebook-sop     
+D:\Work\agent-demo\SuperDev-Studio\docs\assets\timeline-knowledge-notebook-sop\logs
+
+

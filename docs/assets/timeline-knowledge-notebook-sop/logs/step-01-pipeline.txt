@@ -1,0 +1,73 @@
+PS d:\Work\agent-demo\SuperDev-Studio\output\sop-demo\timeline-knowledge-notebook> super-dev pipeline ???????????????????????? -p web -f react -b go --name timeline-knowledge-notebook --quality-threshold 80
+
+============================================================
+Super Dev 完整流水线
+============================================================
+项目: timeline-knowledge-notebook
+技术栈: web | react | go
+
+第 0 阶段: 需求增强 (联网 + 知识库)...
+  ✓ 需求增强报告: 
+d:\Work\agent-demo\SuperDev-Studio\output\sop-demo\timeline-knowledge-notebook\
+output\timeline-knowledge-notebook-research.md
+  本地知识 0 条 | 联网结果 5 条
+
+第 1 阶段: 生成专业文档...
+  ✓ PRD: 
+d:\Work\agent-demo\SuperDev-Studio\output\sop-demo\timeline-knowledge-notebook\
+output\timeline-knowledge-notebook-prd.md
+  ✓ 架构: 
+d:\Work\agent-demo\SuperDev-Studio\output\sop-demo\timeline-knowledge-notebook\
+output\timeline-knowledge-notebook-architecture.md
+  ✓ UI/UX: 
+d:\Work\agent-demo\SuperDev-Studio\output\sop-demo\timeline-knowledge-notebook\
+output\timeline-knowledge-notebook-uiux.md
+  ✓ 执行路线图: 
+d:\Work\agent-demo\SuperDev-Studio\output\sop-demo\timeline-knowledge-notebook\
+output\timeline-knowledge-notebook-execution-plan.md
+  ✓ 前端蓝图: 
+d:\Work\agent-demo\SuperDev-Studio\output\sop-demo\timeline-knowledge-notebook\
+output\timeline-knowledge-notebook-frontend-blueprint.md
+  场景识别: 1-N+1
+
+第 2 阶段: 生成前端可演示骨架...
+  ✓ 页面: 
+D:\Work\agent-demo\SuperDev-Studio\output\sop-demo\timeline-knowledge-notebook\
+output\frontend\index.html
+  ✓ 样式: 
+D:\Work\agent-demo\SuperDev-Studio\output\sop-demo\timeline-knowledge-notebook\
+output\frontend\styles.css
+  ✓ 脚本: 
+D:\Work\agent-demo\SuperDev-Studio\output\sop-demo\timeline-knowledge-notebook\
+output\frontend\app.js
+
+第 3 阶段: 创建 Spec 规范...
+  ✓ 变更 ID: timeline-knowledge-notebook
+  ✓ Spec: .super-dev/changes/timeline-knowledge-notebook/
+
+第 4 阶段: 生成前后端实现骨架...
+  ✓ 前端骨架文件: 8 个
+  ✓ 后端骨架文件: 5 个
+  ✓ Spec 任务执行: 13/13
+  ✓ 任务报告: 
+D:\Work\agent-demo\SuperDev-Studio\output\sop-demo\timeline-knowledge-notebook\
+output\timeline-knowledge-notebook-task-execution.md
+
+第 5 阶段: 红队审查...
+  ✓ 安全问题: 0 high/critical
+  ✓ 性能问题: 0 high/critical
+  ✓ 架构问题: 1 high/critical
+  ✓ 总分: 70/100
+  ✓ 报告: 
+d:\Work\agent-demo\SuperDev-Studio\output\sop-demo\timeline-knowledge-notebook\
+output\timeline-knowledge-notebook-redteam.md
+
+第 6 阶段: 质量门禁检查...
+  场景: 1-N+1 增量开发
+  未通过 总分: 73/100
+  ✓ 报告: 
+d:\Work\agent-demo\SuperDev-Studio\output\sop-demo\timeline-knowledge-notebook\
+output\timeline-knowledge-notebook-quality-gate.md
+
+质量门禁未通过，流水线终止
+请修复以下问题后重新运行:
