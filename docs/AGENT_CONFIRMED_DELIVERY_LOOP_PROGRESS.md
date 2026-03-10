@@ -1093,3 +1093,95 @@ The UI is now much closer to the intended simple user journey, but the runtime s
 ### 3. Continue compressing the ordinary-user experience
 
 The result area now reads much more cleanly, but the next step is to keep separating ordinary-user views from advanced operator views so most users only see simple requirement input, confirmation, and results by default.
+
+# Agent Confirmed Delivery Loop - Execution Report (2026-03-11 / Final Acceptance Persistence)
+
+## Goal
+
+Persist the final sign-off decision at the run level so users can explicitly accept or reopen a delivery candidate from the handoff area instead of relying only on transient UI guidance.
+
+## Delivered in this phase
+
+### 1. Run-level final acceptance persistence
+
+- Added `DeliveryAcceptance` as a dedicated store model plus database migration support.
+- Added backend store helpers for upserting and reading a run-level acceptance record.
+- Final sign-off now survives page reloads and is attached to the delivery run itself.
+
+### 2. Backend guardrails before sign-off
+
+- Added `GET` and `PUT` endpoints for run-level delivery acceptance.
+- The backend now validates sign-off readiness before accepting a run:
+  - run completed
+  - preview accepted
+  - no open approval gates
+  - no open residual items
+  - quality evidence present
+  - handoff artifacts present
+- Recording or reopening final sign-off also appends a run event so the lifecycle remains visible in the timeline.
+
+### 3. Handoff UI updates on both user surfaces
+
+- `frontend/src/components/pipeline/DeliveryHandoffCard.tsx` now renders:
+  - persistent sign-off badge
+  - sign-off note
+  - record/reopen actions
+- `frontend/src/pages/SimpleDeliveryPage.tsx` now loads and mutates final sign-off state from the simplified delivery cockpit.
+- `frontend/src/pages/PipelinePage.tsx` now uses the same acceptance record in the operator-facing pipeline details view.
+
+### 4. Coverage and regression validation
+
+- Added backend coverage for store + API delivery acceptance flows.
+- Added frontend coverage for:
+  - handoff card sign-off rendering
+  - simplified delivery sign-off action when the handoff is ready
+  - pipeline page API wiring for delivery acceptance state
+- Also repaired a malformed test block in `SimpleDeliveryPage.test.tsx` that was preventing the targeted suite from compiling.
+
+## Validation
+
+### Backend
+
+Executed:
+
+- `go test ./internal/store ./internal/api -run DeliveryAcceptance -count=1`
+
+Result: passed.
+
+### Frontend
+
+Executed:
+
+- `npm test -- src/components/pipeline/DeliveryHandoffCard.test.tsx src/pages/SimpleDeliveryPage.test.tsx src/pages/PipelinePage.test.tsx`
+- `npm run build`
+
+Result: passed.
+
+### Super Dev pipeline
+
+Executed:
+
+- `super-dev task status final-acceptance-persistence`
+- `super-dev task run final-acceptance-persistence`
+- `super-dev quality --type all`
+- `super-dev spec archive final-acceptance-persistence`
+
+Result:
+
+- Task completion: `4/4`
+- Quality gate: `87/100`
+- Archive path: `.super-dev/archive/final-acceptance-persistence/`
+
+## Remaining priorities
+
+### 1. Feed final acceptance back into the autonomous loop
+
+The final sign-off state is now persistent, but the runtime still needs to use it as a stronger signal for release closure, post-acceptance summaries, and next-step dispatch decisions.
+
+### 2. Strengthen repo-wide regression stability
+
+A wider backend regression run still exposes pre-existing failures outside this change in `backend/src`, `internal/agentruntime/eino`, and `internal/store`. Those should be cleaned up in a separate stabilization pass.
+
+### 3. Continue simplifying the ordinary-user journey
+
+The simplified page now supports explicit final sign-off, but the next UX step is to hide even more operator-level detail by default and keep the primary flow focused on request input, confirmation, result review, and acceptance.

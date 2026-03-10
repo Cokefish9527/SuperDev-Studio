@@ -251,6 +251,11 @@ export default function PipelinePage() {
       return status === 'running' || status === 'queued' || status === 'awaiting_human' || status === 'completed' ? 2000 : false;
     },
   });
+  const deliveryAcceptanceQuery = useQuery({
+    queryKey: ['run-delivery-acceptance', selectedRunId],
+    queryFn: () => apiClient.getRunDeliveryAcceptance(selectedRunId),
+    enabled: !!selectedRunId,
+  });
 
   const startMutation = useMutation({
     mutationFn: apiClient.startPipeline,
@@ -406,6 +411,26 @@ export default function PipelinePage() {
       }
     },
     onError: (error: Error) => message.error(error.message || '更新预览验收状态失败'),
+  });
+
+  const updateDeliveryAcceptanceMutation = useMutation({
+    mutationFn: ({
+      runId,
+      status,
+    }: {
+      runId: string;
+      status: 'accepted' | 'revoked';
+    }) => apiClient.updateRunDeliveryAcceptance(runId, { status }),
+    onSuccess: (_, variables) => {
+      message.success(variables.status === 'accepted' ? 'Final sign-off recorded.' : 'Final sign-off reopened.');
+      void queryClient.invalidateQueries({ queryKey: ['run-delivery-acceptance', variables.runId] });
+      void queryClient.invalidateQueries({ queryKey: ['run-events', variables.runId] });
+      void queryClient.invalidateQueries({ queryKey: ['run', variables.runId] });
+      if (activeProjectId) {
+        void queryClient.invalidateQueries({ queryKey: ['runs', activeProjectId] });
+      }
+    },
+    onError: (error: Error) => message.error(error.message || 'Failed to update final sign-off'),
   });
 
   const completionData = completionQuery.data as PipelineCompletion | undefined;
@@ -853,11 +878,16 @@ export default function PipelinePage() {
                 previewSessions={previewSessions}
                 approvalGates={approvalGates}
                 residualItems={residualItems}
+                deliveryAcceptance={deliveryAcceptanceQuery.data ?? null}
+                onAcceptFinalAcceptance={() => selectedRun && updateDeliveryAcceptanceMutation.mutate({ runId: selectedRun.id, status: 'accepted' })}
+                onRevokeFinalAcceptance={() => selectedRun && updateDeliveryAcceptanceMutation.mutate({ runId: selectedRun.id, status: 'revoked' })}
+                submittingFinalAcceptance={updateDeliveryAcceptanceMutation.isPending}
                 apiBase={apiBase}
                 loading={
                   completionQuery.isLoading ||
                   eventsQuery.isLoading ||
                   previewSessionsQuery.isLoading ||
+                  deliveryAcceptanceQuery.isLoading ||
                   approvalGatesQuery.isLoading ||
                   residualItemsQuery.isLoading
                 }

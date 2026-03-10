@@ -26,7 +26,9 @@ vi.mock('../api/client', async (importOriginal) => {
       listRunPreviewSessions: vi.fn(),
       listRunApprovalGates: vi.fn(),
       listRunResidualItems: vi.fn(),
+      getRunDeliveryAcceptance: vi.fn(),
       updatePreviewSession: vi.fn(),
+      updateRunDeliveryAcceptance: vi.fn(),
       autoAdvancePipeline: vi.fn(),
     },
   };
@@ -83,7 +85,9 @@ describe('SimpleDeliveryPage', () => {
     vi.mocked(apiClient.listRunPreviewSessions).mockResolvedValue([]);
     vi.mocked(apiClient.listRunApprovalGates).mockResolvedValue([]);
     vi.mocked(apiClient.listRunResidualItems).mockResolvedValue([]);
+    vi.mocked(apiClient.getRunDeliveryAcceptance).mockResolvedValue(null);
     vi.mocked(apiClient.updatePreviewSession).mockResolvedValue(undefined as never);
+    vi.mocked(apiClient.updateRunDeliveryAcceptance).mockResolvedValue(undefined as never);
     vi.mocked(apiClient.autoAdvancePipeline).mockResolvedValue({
       action: 'complete_delivery',
       reason: 'Delivery is already complete.',
@@ -633,4 +637,198 @@ describe('SimpleDeliveryPage', () => {
       expect(apiClient.autoAdvancePipeline).toHaveBeenCalledTimes(2);
     });
   }, 20000);
+
+  it('records final sign-off when the handoff is ready', async () => {
+    let deliveryAcceptance: any = null;
+
+    vi.mocked(apiClient.createRequirementSession).mockResolvedValue({
+      session: {
+        id: 'session-final',
+        project_id: 'project-1',
+        title: 'Release candidate',
+        raw_input: 'Ship a ready release candidate.',
+        status: 'awaiting_confirm',
+        latest_summary: 'summary',
+        latest_prd: 'prd',
+        latest_plan: 'plan',
+        latest_risks: 'risks',
+        created_at: '2026-03-10T00:00:00Z',
+        updated_at: '2026-03-10T00:00:00Z',
+      },
+      doc_versions: [],
+    });
+    vi.mocked(apiClient.confirmRequirementSession).mockResolvedValue({
+      session: {
+        id: 'session-final',
+        project_id: 'project-1',
+        title: 'Release candidate',
+        raw_input: 'Ship a ready release candidate.',
+        status: 'confirmed',
+        latest_summary: 'summary',
+        latest_prd: 'prd',
+        latest_plan: 'plan',
+        latest_risks: 'risks',
+        latest_change_batch_id: 'change-final',
+        latest_run_id: 'run-final',
+        created_at: '2026-03-10T00:00:00Z',
+        updated_at: '2026-03-10T00:00:00Z',
+      },
+      run: {
+        id: 'run-final',
+        project_id: 'project-1',
+        prompt: 'Release candidate',
+        status: 'completed',
+        progress: 100,
+        stage: 'done',
+        step_by_step: true,
+        created_at: '2026-03-10T00:00:00Z',
+        updated_at: '2026-03-10T00:00:00Z',
+      },
+      change_batch: {
+        id: 'change-final',
+        project_id: 'project-1',
+        title: 'Release candidate',
+        goal: 'Ship a ready release candidate.',
+        status: 'running',
+        mode: 'step_by_step',
+        created_at: '2026-03-10T00:00:00Z',
+        updated_at: '2026-03-10T00:00:00Z',
+      },
+    });
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      id: 'run-final',
+      project_id: 'project-1',
+      prompt: 'Release candidate',
+      status: 'completed',
+      progress: 100,
+      stage: 'done',
+      step_by_step: true,
+      created_at: '2026-03-10T00:00:00Z',
+      updated_at: '2026-03-10T00:00:00Z',
+    });
+    vi.mocked(apiClient.getRunCompletion).mockResolvedValue({
+      run_id: 'run-final',
+      status: 'completed',
+      output_dir: 'D:/Work/output',
+      checklist: [],
+      artifacts: [
+        {
+          name: 'Frontend preview',
+          path: 'output/frontend/index.html',
+          kind: 'frontend',
+          size_bytes: 128,
+          updated_at: '2026-03-10T00:00:45Z',
+          preview_url: '/api/pipeline/runs/run-final/preview/frontend/index.html',
+          preview_type: 'html',
+          stage: 'output',
+        },
+        {
+          name: 'superdev-studio-quality-gate.md',
+          path: 'output/superdev-studio-quality-gate.md',
+          kind: 'markdown',
+          size_bytes: 320,
+          updated_at: '2026-03-10T00:00:45Z',
+          preview_url: '/api/pipeline/runs/run-final/preview/superdev-studio-quality-gate.md',
+          preview_type: 'markdown',
+          stage: 'output',
+        },
+        {
+          name: 'superdev-studio-task-execution.md',
+          path: 'output/superdev-studio-task-execution.md',
+          kind: 'text',
+          size_bytes: 280,
+          updated_at: '2026-03-10T00:00:46Z',
+          preview_url: '/api/pipeline/runs/run-final/preview/superdev-studio-task-execution.md',
+          preview_type: 'text',
+          stage: 'output',
+        },
+      ],
+      stages: [],
+      preview_url: '/api/pipeline/runs/run-final/preview/frontend/index.html',
+    });
+    vi.mocked(apiClient.listRunEvents).mockResolvedValue([
+      {
+        id: 1,
+        run_id: 'run-final',
+        stage: 'lifecycle-quality',
+        status: 'completed',
+        message: 'Quality gate passed on iteration 1',
+        created_at: '2026-03-10T00:00:50Z',
+      },
+    ]);
+    vi.mocked(apiClient.listRuns).mockResolvedValue([
+      {
+        id: 'run-final',
+        project_id: 'project-1',
+        change_batch_id: 'change-final',
+        prompt: 'Release candidate',
+        status: 'completed',
+        progress: 100,
+        stage: 'done',
+        step_by_step: true,
+        created_at: '2026-03-10T00:00:21Z',
+        updated_at: '2026-03-10T00:00:50Z',
+      },
+    ]);
+    vi.mocked(apiClient.listRunPreviewSessions).mockImplementation(async (runId: string) => {
+      if (runId !== 'run-final') {
+        return [];
+      }
+      return [
+        {
+          id: 'preview-final',
+          project_id: 'project-1',
+          pipeline_run_id: 'run-final',
+          preview_url: '/api/pipeline/runs/run-final/preview/frontend/index.html',
+          preview_type: 'html',
+          title: 'Final preview',
+          source_key: 'preview:final',
+          status: 'accepted',
+          reviewer_note: 'Looks good',
+          created_at: '2026-03-10T00:00:00Z',
+          updated_at: '2026-03-10T00:00:00Z',
+        },
+      ];
+    });
+    vi.mocked(apiClient.listRunApprovalGates).mockResolvedValue([]);
+    vi.mocked(apiClient.listRunResidualItems).mockResolvedValue([]);
+    vi.mocked(apiClient.getRunDeliveryAcceptance).mockImplementation(async () => deliveryAcceptance);
+    vi.mocked(apiClient.updateRunDeliveryAcceptance).mockImplementation(async (_runId, payload) => {
+      deliveryAcceptance = {
+        id: 'acceptance-1',
+        project_id: 'project-1',
+        pipeline_run_id: 'run-final',
+        status: payload.status,
+        reviewer_note: payload.reviewer_note,
+        created_at: '2026-03-10T00:00:00Z',
+        updated_at: '2026-03-10T00:01:00Z',
+        reviewed_at: '2026-03-10T00:01:00Z',
+      };
+      return deliveryAcceptance;
+    });
+    vi.mocked(apiClient.autoAdvancePipeline).mockResolvedValue({
+      action: 'complete_delivery',
+      reason: 'Delivery is already complete; no further automatic action is required.',
+      executed: false,
+      next_command: 'complete_delivery',
+    });
+
+    renderWithProviders(<SimpleDeliveryPage />);
+
+    await userEvent.type(screen.getByPlaceholderText(TEXTAREA_PLACEHOLDER), 'Ship a ready release candidate.');
+    await userEvent.click(screen.getByRole('button', { name: '\u751f\u6210\u9700\u6c42\u8349\u6848' }));
+    await userEvent.click(await screen.findByRole('button', { name: '\u786e\u8ba4\u5e76\u542f\u52a8\u4ea4\u4ed8' }));
+
+    const signOffButton = await screen.findByTestId('delivery-handoff-record-final-acceptance');
+    expect(signOffButton).toHaveTextContent('Record final sign-off');
+
+    await userEvent.click(signOffButton);
+
+    await waitFor(() => {
+      expect(apiClient.updateRunDeliveryAcceptance).toHaveBeenCalledWith('run-final', { status: 'accepted' });
+    });
+
+    expect(await screen.findByTestId('delivery-handoff-final-acceptance-state')).toHaveTextContent('Signed off');
+  }, 20000);
+
 });

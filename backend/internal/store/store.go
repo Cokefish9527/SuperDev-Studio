@@ -387,6 +387,19 @@ func (s *Store) migrate(ctx context.Context) error {
 			FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
 			FOREIGN KEY(pipeline_run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
 		);`,
+		`CREATE TABLE IF NOT EXISTS delivery_acceptances (
+			id TEXT PRIMARY KEY,
+			project_id TEXT NOT NULL,
+			pipeline_run_id TEXT NOT NULL UNIQUE,
+			change_batch_id TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'accepted',
+			reviewer_note TEXT NOT NULL DEFAULT '',
+			reviewed_at TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+			FOREIGN KEY(pipeline_run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
+		);`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_change_batches_project_id ON change_batches(project_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_pipeline_runs_project_id ON pipeline_runs(project_id);`,
@@ -399,6 +412,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_residual_items_project_run ON residual_items(project_id, pipeline_run_id, status, updated_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_preview_sessions_project_run ON preview_sessions(project_id, pipeline_run_id, status, updated_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_approval_gates_project_run ON approval_gates(project_id, pipeline_run_id, status, updated_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_delivery_acceptances_project_run ON delivery_acceptances(project_id, pipeline_run_id, status, updated_at);`,
 	}
 
 	for _, stmt := range stmts {

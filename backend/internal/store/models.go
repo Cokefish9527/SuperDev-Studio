@@ -213,6 +213,18 @@ type ApprovalGate struct {
 	ResolvedAt    *time.Time `json:"resolved_at,omitempty"`
 }
 
+type DeliveryAcceptance struct {
+	ID            string     `json:"id"`
+	ProjectID     string     `json:"project_id"`
+	PipelineRunID string     `json:"pipeline_run_id"`
+	ChangeBatchID string     `json:"change_batch_id,omitempty"`
+	Status        string     `json:"status"`
+	ReviewerNote  string     `json:"reviewer_note,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	ReviewedAt    *time.Time `json:"reviewed_at,omitempty"`
+}
+
 type Memory struct {
 	ID         string    `json:"id"`
 	ProjectID  string    `json:"project_id"`

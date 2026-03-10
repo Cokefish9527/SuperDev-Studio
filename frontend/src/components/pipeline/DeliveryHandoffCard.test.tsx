@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
 import DeliveryHandoffCard from './DeliveryHandoffCard';
 
 const baseRun = {
@@ -64,39 +65,46 @@ const baseCompletion = {
   ],
 };
 
+const readyEvents = [
+  {
+    id: 1,
+    run_id: 'run-1',
+    stage: 'lifecycle-quality',
+    status: 'completed',
+    message: 'Quality gate passed on iteration 1',
+    created_at: '2026-03-11T00:00:00Z',
+  },
+];
+
+const acceptedPreviewSessions = [
+  {
+    id: 'preview-1',
+    project_id: 'project-1',
+    pipeline_run_id: 'run-1',
+    preview_url: '/api/pipeline/runs/run-1/preview/index.html',
+    preview_type: 'html',
+    title: 'Final preview',
+    source_key: 'preview:1',
+    status: 'accepted',
+    reviewer_note: 'Looks good',
+    created_at: '2026-03-11T00:00:00Z',
+    updated_at: '2026-03-11T00:00:00Z',
+  },
+];
+
 describe('DeliveryHandoffCard', () => {
-  it('shows a ready handoff state when preview, quality, and package are complete', () => {
+  it('shows a ready handoff state when preview, quality, and package are complete', async () => {
+    const onAcceptFinalAcceptance = vi.fn();
+
     render(
       <DeliveryHandoffCard
         run={baseRun}
         completion={baseCompletion}
-        events={[
-          {
-            id: 1,
-            run_id: 'run-1',
-            stage: 'lifecycle-quality',
-            status: 'completed',
-            message: 'Quality gate passed on iteration 1',
-            created_at: '2026-03-11T00:00:00Z',
-          },
-        ]}
-        previewSessions={[
-          {
-            id: 'preview-1',
-            project_id: 'project-1',
-            pipeline_run_id: 'run-1',
-            preview_url: '/api/pipeline/runs/run-1/preview/index.html',
-            preview_type: 'html',
-            title: 'Final preview',
-            source_key: 'preview:1',
-            status: 'accepted',
-            reviewer_note: 'Looks good',
-            created_at: '2026-03-11T00:00:00Z',
-            updated_at: '2026-03-11T00:00:00Z',
-          },
-        ]}
+        events={readyEvents}
+        previewSessions={acceptedPreviewSessions}
         approvalGates={[]}
         residualItems={[]}
+        onAcceptFinalAcceptance={onAcceptFinalAcceptance}
         apiBase="http://localhost:8080"
       />,
     );
@@ -110,7 +118,12 @@ describe('DeliveryHandoffCard', () => {
     expect(screen.getByTestId('delivery-handoff-local-preview')).toHaveTextContent('python -m http.server 4173 --directory "D:/Work/output"');
     expect(screen.getByTestId('delivery-handoff-local-preview')).toHaveTextContent('http://127.0.0.1:4173/frontend/index.html');
     expect(screen.getByTestId('delivery-handoff-local-preview')).toHaveTextContent('output/frontend/index.html');
-    expect(screen.getAllByRole('button').length).toBeGreaterThanOrEqual(4);
+    expect(screen.getByTestId('delivery-handoff-record-final-acceptance')).toHaveTextContent('Record final sign-off');
+
+    await userEvent.click(screen.getByTestId('delivery-handoff-record-final-acceptance'));
+
+    expect(onAcceptFinalAcceptance).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByRole('button').length).toBeGreaterThanOrEqual(5);
   });
 
   it('shows a blocked handoff state when open approvals or residuals still exist', () => {
@@ -173,5 +186,40 @@ describe('DeliveryHandoffCard', () => {
     expect(screen.getByText('1 residual item(s) still need follow-up.')).toBeInTheDocument();
     expect(screen.getByTestId('delivery-handoff-acceptance')).toHaveTextContent('Resolve the blocked checks before requesting final sign-off.');
     expect(screen.getByTestId('delivery-handoff-local-preview')).toHaveTextContent('python -m http.server 4173 --directory "D:/Work/output"');
+  });
+
+  it('shows a persisted final sign-off state and allows reopening the review', async () => {
+    const onRevokeFinalAcceptance = vi.fn();
+
+    render(
+      <DeliveryHandoffCard
+        run={baseRun}
+        completion={baseCompletion}
+        events={readyEvents}
+        previewSessions={acceptedPreviewSessions}
+        approvalGates={[]}
+        residualItems={[]}
+        deliveryAcceptance={{
+          id: 'acceptance-1',
+          project_id: 'project-1',
+          pipeline_run_id: 'run-1',
+          status: 'accepted',
+          reviewer_note: 'Signed off by reviewer',
+          created_at: '2026-03-11T00:00:00Z',
+          updated_at: '2026-03-11T00:00:00Z',
+          reviewed_at: '2026-03-11T00:00:00Z',
+        }}
+        onRevokeFinalAcceptance={onRevokeFinalAcceptance}
+        apiBase="http://localhost:8080"
+      />,
+    );
+
+    expect(screen.getByTestId('delivery-handoff-final-acceptance-state')).toHaveTextContent('Signed off');
+    expect(screen.getByTestId('delivery-handoff-final-acceptance-note')).toHaveTextContent('Signed off by reviewer');
+    expect(screen.getByTestId('delivery-handoff-revoke-final-acceptance')).toHaveTextContent('Reopen sign-off');
+
+    await userEvent.click(screen.getByTestId('delivery-handoff-revoke-final-acceptance'));
+
+    expect(onRevokeFinalAcceptance).toHaveBeenCalledTimes(1);
   });
 });

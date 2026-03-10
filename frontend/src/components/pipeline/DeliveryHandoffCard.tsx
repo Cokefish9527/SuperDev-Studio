@@ -2,6 +2,7 @@ import { Alert, Button, Card, Divider, Empty, Space, Tag, Typography } from 'ant
 import type {
   ApprovalGate,
   PipelineArtifact,
+  DeliveryAcceptance,
   PipelineCompletion,
   PipelineRun,
   PreviewSession,
@@ -46,6 +47,10 @@ type Props = {
   previewSessions: PreviewSession[];
   approvalGates: ApprovalGate[];
   residualItems: ResidualItem[];
+  deliveryAcceptance?: DeliveryAcceptance | null;
+  onAcceptFinalAcceptance?: () => void;
+  onRevokeFinalAcceptance?: () => void;
+  submittingFinalAcceptance?: boolean;
   apiBase: string;
   loading?: boolean;
 };
@@ -57,6 +62,10 @@ export default function DeliveryHandoffCard({
   previewSessions,
   approvalGates,
   residualItems,
+  deliveryAcceptance,
+  onAcceptFinalAcceptance,
+  onRevokeFinalAcceptance,
+  submittingFinalAcceptance,
   apiBase,
   loading,
 }: Props) {
@@ -68,13 +77,31 @@ export default function DeliveryHandoffCard({
         <HandoffBody
           summary={buildHandoffSummary({ run, completion, events, previewSessions, approvalGates, residualItems, apiBase })}
           apiBase={apiBase}
+          deliveryAcceptance={deliveryAcceptance}
+          onAcceptFinalAcceptance={onAcceptFinalAcceptance}
+          onRevokeFinalAcceptance={onRevokeFinalAcceptance}
+          submittingFinalAcceptance={submittingFinalAcceptance}
         />
       )}
     </Card>
   );
 }
 
-function HandoffBody({ summary, apiBase }: { summary: HandoffSummary; apiBase: string }) {
+function HandoffBody({
+  summary,
+  apiBase,
+  deliveryAcceptance,
+  onAcceptFinalAcceptance,
+  onRevokeFinalAcceptance,
+  submittingFinalAcceptance,
+}: {
+  summary: HandoffSummary;
+  apiBase: string;
+  deliveryAcceptance?: DeliveryAcceptance | null;
+  onAcceptFinalAcceptance?: () => void;
+  onRevokeFinalAcceptance?: () => void;
+  submittingFinalAcceptance?: boolean;
+}) {
   return (
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
       <Alert
@@ -160,6 +187,46 @@ function HandoffBody({ summary, apiBase }: { summary: HandoffSummary; apiBase: s
               {index + 1}. {step}
             </Typography.Paragraph>
           ))}
+        </Space>
+        {deliveryAcceptance ? (
+          <Typography.Paragraph
+            type="secondary"
+            style={{ marginBottom: 0, marginTop: 8 }}
+            data-testid="delivery-handoff-final-acceptance-note"
+          >
+            {buildFinalAcceptanceNote(deliveryAcceptance)}
+          </Typography.Paragraph>
+        ) : null}
+        <Space wrap size={[8, 8]} style={{ marginTop: 12 }}>
+          {deliveryAcceptance ? (
+            <Tag
+              color={finalAcceptanceTagColor(deliveryAcceptance.status)}
+              data-testid="delivery-handoff-final-acceptance-state"
+            >
+              {finalAcceptanceTagLabel(deliveryAcceptance.status)}
+            </Tag>
+          ) : null}
+          {summary.overall === 'ready' && deliveryAcceptance?.status !== 'accepted' && onAcceptFinalAcceptance ? (
+            <Button
+              type="primary"
+              size="small"
+              data-testid="delivery-handoff-record-final-acceptance"
+              onClick={onAcceptFinalAcceptance}
+              loading={submittingFinalAcceptance}
+            >
+              Record final sign-off
+            </Button>
+          ) : null}
+          {deliveryAcceptance?.status === 'accepted' && onRevokeFinalAcceptance ? (
+            <Button
+              size="small"
+              data-testid="delivery-handoff-revoke-final-acceptance"
+              onClick={onRevokeFinalAcceptance}
+              loading={submittingFinalAcceptance}
+            >
+              Reopen sign-off
+            </Button>
+          ) : null}
         </Space>
       </div>
 
@@ -575,6 +642,36 @@ function buildArtifactHref(apiBase: string, previewUrl?: string) {
     return previewUrl;
   }
   return `${apiBase}${previewUrl}`;
+}
+
+function buildFinalAcceptanceNote(item: DeliveryAcceptance) {
+  const base =
+    item.status === 'accepted'
+      ? 'Final sign-off is recorded for this run. Treat it as the current accepted release candidate until another review reopens it.'
+      : 'Final sign-off was reopened. Complete another review before treating this run as accepted.';
+  return item.reviewer_note ? `${base} ${item.reviewer_note}` : base;
+}
+
+function finalAcceptanceTagColor(status?: string) {
+  switch (status) {
+    case 'accepted':
+      return 'green';
+    case 'revoked':
+      return 'orange';
+    default:
+      return 'default';
+  }
+}
+
+function finalAcceptanceTagLabel(status?: string) {
+  switch (status) {
+    case 'accepted':
+      return 'Signed off';
+    case 'revoked':
+      return 'Reopened';
+    default:
+      return 'Pending';
+  }
 }
 
 function overallAlertType(status: HandoffSummary['overall']) {

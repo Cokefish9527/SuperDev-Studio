@@ -39,8 +39,10 @@ vi.mock('../api/client', async (importOriginal) => {
       listRunResidualItems: vi.fn(),
       listRunPreviewSessions: vi.fn(),
       listRunApprovalGates: vi.fn(),
+      getRunDeliveryAcceptance: vi.fn(),
       updateResidualItem: vi.fn(),
       updatePreviewSession: vi.fn(),
+      updateRunDeliveryAcceptance: vi.fn(),
       startPipeline: vi.fn(),
       retryPipeline: vi.fn(),
       resumePipeline: vi.fn(),
@@ -108,8 +110,10 @@ describe('PipelinePage', () => {
     vi.mocked(apiClient.listRunResidualItems).mockResolvedValue([]);
     vi.mocked(apiClient.listRunPreviewSessions).mockResolvedValue([]);
     vi.mocked(apiClient.listRunApprovalGates).mockResolvedValue([]);
+    vi.mocked(apiClient.getRunDeliveryAcceptance).mockResolvedValue(null);
     vi.mocked(apiClient.updateResidualItem).mockResolvedValue(undefined as never);
     vi.mocked(apiClient.updatePreviewSession).mockResolvedValue(undefined as never);
+    vi.mocked(apiClient.updateRunDeliveryAcceptance).mockResolvedValue(undefined as never);
     vi.mocked(apiClient.autoAdvancePipeline).mockResolvedValue({
       action: 'complete_delivery',
       reason: 'No further action required.',

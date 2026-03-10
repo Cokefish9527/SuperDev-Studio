@@ -5,6 +5,7 @@ import type {
   AgentStep,
   AgentToolCall,
   ApprovalGate,
+  DeliveryAcceptance,
   PipelineAutoAdvanceResult,
   PipelineRunAgent,
   ChangeBatch,
@@ -207,6 +208,12 @@ export const apiClient = {
     unwrapItems<PreviewSession>(api.get(`/api/pipeline/runs/${runId}/preview-sessions`, { params: { limit } })),
   listRunApprovalGates: async (runId: string, limit = 100) =>
     unwrapItems<ApprovalGate>(api.get(`/api/pipeline/runs/${runId}/approval-gates`, { params: { limit } })),
+  getRunDeliveryAcceptance: async (runId: string) =>
+    (await api.get<DeliveryAcceptance | null>(`/api/pipeline/runs/${runId}/delivery-acceptance`)).data,
+  updateRunDeliveryAcceptance: async (
+    runId: string,
+    payload: { status: 'accepted' | 'revoked'; reviewer_note?: string },
+  ) => (await api.put<DeliveryAcceptance>(`/api/pipeline/runs/${runId}/delivery-acceptance`, payload)).data,
   updateResidualItem: async (itemId: string, payload: { status: 'open' | 'resolved' | 'waived'; resolution_note?: string }) =>
     (await api.patch<ResidualItem>(`/api/residual-items/${itemId}`, payload)).data,
   updatePreviewSession: async (sessionId: string, payload: { status: 'generated' | 'accepted' | 'rejected'; reviewer_note?: string }) =>

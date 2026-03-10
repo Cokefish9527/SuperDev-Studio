@@ -49,6 +49,9 @@ const zh = {
   previewAccepted: '预览已验收通过，系统继续评估下一步',
   previewRejected: '预览已驳回，系统将准备重新交付',
   previewUpdateFailed: '更新预览验收状态失败',
+  finalAcceptanceRecorded: '?????????',
+  finalAcceptanceReopened: '?????????',
+  finalAcceptanceUpdateFailed: '??????????',
   previewAcceptedLabel: '已通过',
   previewRejectedLabel: '已驳回',
   previewPendingLabel: '待验收',
@@ -306,6 +309,7 @@ export default function SimpleDeliveryPage() {
     void queryClient.invalidateQueries({ queryKey: ['simple-run-preview-sessions', runId] });
     void queryClient.invalidateQueries({ queryKey: ['simple-run-approval-gates', runId] });
     void queryClient.invalidateQueries({ queryKey: ['simple-run-residual-items', runId] });
+    void queryClient.invalidateQueries({ queryKey: ['simple-run-delivery-acceptance', runId] });
     void queryClient.invalidateQueries({ queryKey: ['simple-ledger-run-signal', runId] });
     void queryClient.invalidateQueries({ queryKey: ['simple-change-batch-runs'] });
   };
@@ -353,6 +357,12 @@ export default function SimpleDeliveryPage() {
     queryFn: () => apiClient.listRunPreviewSessions(latestRunId),
     enabled: !!latestRunId,
     refetchInterval: latestRunId ? 5000 : false,
+  });
+
+  const deliveryAcceptanceQuery = useQuery({
+    queryKey: ['simple-run-delivery-acceptance', latestRunId],
+    queryFn: () => apiClient.getRunDeliveryAcceptance(latestRunId),
+    enabled: !!latestRunId,
   });
 
   const approvalGatesQuery = useQuery({
@@ -492,6 +502,20 @@ export default function SimpleDeliveryPage() {
     onError: (err: Error) => message.error(err.message || zh.previewUpdateFailed),
   });
 
+  const updateDeliveryAcceptance = useMutation({
+    mutationFn: async ({ status }: { status: 'accepted' | 'revoked' }) => {
+      if (!latestRunId) {
+        throw new Error(zh.missingSession);
+      }
+      return apiClient.updateRunDeliveryAcceptance(latestRunId, { status });
+    },
+    onSuccess: (_updated, variables) => {
+      message.success(variables.status === 'accepted' ? zh.finalAcceptanceRecorded : zh.finalAcceptanceReopened);
+      invalidateRunQueries(latestRunId);
+    },
+    onError: (err: Error) => message.error(err.message || zh.finalAcceptanceUpdateFailed),
+  });
+
   const docVersions = sessionBundle?.doc_versions ?? [];
   const summaryDoc = useMemo(() => pickLatestDoc(docVersions, 'summary'), [docVersions]);
   const prdDoc = useMemo(() => pickLatestDoc(docVersions, 'prd'), [docVersions]);
@@ -504,6 +528,7 @@ export default function SimpleDeliveryPage() {
   const previewHref = buildPreviewHref(apiBase, completionQuery.data?.preview_url || latestPreviewSession?.preview_url);
   const approvalGates = approvalGatesQuery.data ?? [];
   const residualItems = residualItemsQuery.data ?? [];
+  const deliveryAcceptance = deliveryAcceptanceQuery.data ?? null;
   const deliveryLedgerRuns = useMemo(
     () =>
       (changeBatchRunsQuery.data ?? [])
@@ -926,11 +951,16 @@ export default function SimpleDeliveryPage() {
                         previewSessions={previewSessions}
                         approvalGates={approvalGates}
                         residualItems={residualItems}
+                        deliveryAcceptance={deliveryAcceptance}
+                        onAcceptFinalAcceptance={() => updateDeliveryAcceptance.mutate({ status: 'accepted' })}
+                        onRevokeFinalAcceptance={() => updateDeliveryAcceptance.mutate({ status: 'revoked' })}
+                        submittingFinalAcceptance={updateDeliveryAcceptance.isPending}
                         apiBase={apiBase}
                         loading={
                           completionQuery.isLoading ||
                           eventsQuery.isLoading ||
                           previewSessionsQuery.isLoading ||
+                          deliveryAcceptanceQuery.isLoading ||
                           approvalGatesQuery.isLoading ||
                           residualItemsQuery.isLoading
                         }

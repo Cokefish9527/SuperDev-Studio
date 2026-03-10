@@ -111,6 +111,8 @@ func (s *Server) Router() http.Handler {
 	r.Get("/api/pipeline/runs/{runID}/residual-items", s.handleListRunResidualItems)
 	r.Get("/api/pipeline/runs/{runID}/preview-sessions", s.handleListRunPreviewSessions)
 	r.Get("/api/pipeline/runs/{runID}/approval-gates", s.handleListRunApprovalGates)
+	r.Get("/api/pipeline/runs/{runID}/delivery-acceptance", s.handleGetRunDeliveryAcceptance)
+	r.With(s.rateLimit(s.mutationPolicy("delivery-acceptance:update"))).Put("/api/pipeline/runs/{runID}/delivery-acceptance", s.handleUpdateRunDeliveryAcceptance)
 	r.Get("/api/pipeline/runs/{runID}/completion", s.handleGetPipelineRunCompletion)
 	r.Get("/api/pipeline/runs/{runID}/preview", s.handlePreviewPipelineRunOutput)
 	r.Get("/api/pipeline/runs/{runID}/preview/*", s.handlePreviewPipelineRunOutput)

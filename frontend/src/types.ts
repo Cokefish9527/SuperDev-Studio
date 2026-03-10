@@ -201,6 +201,18 @@ export type PreviewSession = {
   reviewed_at?: string;
 };
 
+export type DeliveryAcceptance = {
+  id: string;
+  project_id: string;
+  pipeline_run_id: string;
+  change_batch_id?: string;
+  status: 'accepted' | 'revoked' | string;
+  reviewer_note?: string;
+  created_at: string;
+  updated_at: string;
+  reviewed_at?: string;
+};
+
 export type ApprovalGate = {
   id: string;
   project_id: string;
