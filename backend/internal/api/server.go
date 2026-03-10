@@ -92,6 +92,7 @@ func (s *Server) Router() http.Handler {
 		r.With(s.rateLimit(s.expensivePolicy("context-pack:build"))).Post("/{projectID}/context-pack", s.handleBuildContextPack)
 		r.Get("/{projectID}/pipeline-runs", s.handleListPipelineRuns)
 		r.Get("/{projectID}/residual-items", s.handleListProjectResidualItems)
+		r.Get("/{projectID}/preview-sessions", s.handleListProjectPreviewSessions)
 		r.Get("/{projectID}/approval-gates", s.handleListProjectApprovalGates)
 	})
 
@@ -107,12 +108,14 @@ func (s *Server) Router() http.Handler {
 	r.Get("/api/pipeline/runs/{runID}/agent/evidence", s.handleListPipelineRunAgentEvidence)
 	r.Get("/api/pipeline/runs/{runID}/agent/evaluations", s.handleListPipelineRunAgentEvaluations)
 	r.Get("/api/pipeline/runs/{runID}/residual-items", s.handleListRunResidualItems)
+	r.Get("/api/pipeline/runs/{runID}/preview-sessions", s.handleListRunPreviewSessions)
 	r.Get("/api/pipeline/runs/{runID}/approval-gates", s.handleListRunApprovalGates)
 	r.Get("/api/pipeline/runs/{runID}/completion", s.handleGetPipelineRunCompletion)
 	r.Get("/api/pipeline/runs/{runID}/preview", s.handlePreviewPipelineRunOutput)
 	r.Get("/api/pipeline/runs/{runID}/preview/*", s.handlePreviewPipelineRunOutput)
 	r.Get("/api/pipeline/runs/{runID}/events", s.handleListRunEvents)
 	r.With(s.rateLimit(s.mutationPolicy("residual-items:update"))).Patch("/api/residual-items/{itemID}", s.handleUpdateResidualItem)
+	r.With(s.rateLimit(s.mutationPolicy("preview-sessions:update"))).Patch("/api/preview-sessions/{sessionID}", s.handleUpdatePreviewSession)
 
 	return r
 }

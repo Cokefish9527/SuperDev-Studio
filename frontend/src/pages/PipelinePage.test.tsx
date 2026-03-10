@@ -36,6 +36,11 @@ vi.mock('../api/client', async (importOriginal) => {
       listRunAgentToolCalls: vi.fn(),
       listRunAgentEvidence: vi.fn(),
       listRunAgentEvaluations: vi.fn(),
+      listRunResidualItems: vi.fn(),
+      listRunPreviewSessions: vi.fn(),
+      listRunApprovalGates: vi.fn(),
+      updateResidualItem: vi.fn(),
+      updatePreviewSession: vi.fn(),
       startPipeline: vi.fn(),
       retryPipeline: vi.fn(),
       resumePipeline: vi.fn(),
@@ -99,6 +104,11 @@ describe('PipelinePage', () => {
     vi.mocked(apiClient.listRunAgentToolCalls).mockResolvedValue([]);
     vi.mocked(apiClient.listRunAgentEvidence).mockResolvedValue([]);
     vi.mocked(apiClient.listRunAgentEvaluations).mockResolvedValue([]);
+    vi.mocked(apiClient.listRunResidualItems).mockResolvedValue([]);
+    vi.mocked(apiClient.listRunPreviewSessions).mockResolvedValue([]);
+    vi.mocked(apiClient.listRunApprovalGates).mockResolvedValue([]);
+    vi.mocked(apiClient.updateResidualItem).mockResolvedValue(undefined as never);
+    vi.mocked(apiClient.updatePreviewSession).mockResolvedValue(undefined as never);
     vi.mocked(apiClient.getRunCompletion).mockResolvedValue({
       run_id: 'run-1',
       status: 'queued',

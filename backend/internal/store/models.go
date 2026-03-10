@@ -179,6 +179,22 @@ type ResidualItem struct {
 	ResolvedAt       *time.Time `json:"resolved_at,omitempty"`
 }
 
+type PreviewSession struct {
+	ID            string     `json:"id"`
+	ProjectID     string     `json:"project_id"`
+	PipelineRunID string     `json:"pipeline_run_id"`
+	ChangeBatchID string     `json:"change_batch_id,omitempty"`
+	PreviewURL    string     `json:"preview_url"`
+	PreviewType   string     `json:"preview_type"`
+	Title         string     `json:"title"`
+	SourceKey     string     `json:"source_key"`
+	Status        string     `json:"status"`
+	ReviewerNote  string     `json:"reviewer_note,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	ReviewedAt    *time.Time `json:"reviewed_at,omitempty"`
+}
+
 type ApprovalGate struct {
 	ID            string     `json:"id"`
 	ProjectID     string     `json:"project_id"`

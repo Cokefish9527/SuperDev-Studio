@@ -175,6 +175,22 @@ export type ResidualItem = {
   resolved_at?: string;
 };
 
+export type PreviewSession = {
+  id: string;
+  project_id: string;
+  pipeline_run_id: string;
+  change_batch_id?: string;
+  preview_url: string;
+  preview_type: string;
+  title: string;
+  source_key: string;
+  status: 'generated' | 'accepted' | 'rejected' | string;
+  reviewer_note?: string;
+  created_at: string;
+  updated_at: string;
+  reviewed_at?: string;
+};
+
 export type ApprovalGate = {
   id: string;
   project_id: string;

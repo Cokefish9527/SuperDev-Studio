@@ -41,6 +41,7 @@ import type {
   PipelineRunAgent,
   PipelineRun,
   PipelineStage,
+  PreviewSession,
   Project,
   ResidualItem,
 } from '../types';
@@ -239,6 +240,15 @@ export default function PipelinePage() {
       return status === 'running' || status === 'queued' || status === 'awaiting_human' ? 2000 : false;
     },
   });
+  const previewSessionsQuery = useQuery({
+    queryKey: ['run-preview-sessions', selectedRunId],
+    queryFn: () => apiClient.listRunPreviewSessions(selectedRunId),
+    enabled: !!selectedRunId,
+    refetchInterval: () => {
+      const status = runQuery.data?.status;
+      return status === 'running' || status === 'queued' || status === 'awaiting_human' || status === 'completed' ? 2000 : false;
+    },
+  });
 
   const startMutation = useMutation({
     mutationFn: apiClient.startPipeline,
@@ -340,10 +350,34 @@ export default function PipelinePage() {
     },
     onError: (error: Error) => message.error(error.message || '更新残留项失败'),
   });
+  const updatePreviewSessionMutation = useMutation({
+    mutationFn: ({
+      sessionId,
+      status,
+      reviewerNote,
+    }: {
+      sessionId: string;
+      status: 'generated' | 'accepted' | 'rejected';
+      reviewerNote?: string;
+    }) =>
+      apiClient.updatePreviewSession(sessionId, {
+        status,
+        reviewer_note: reviewerNote,
+      }),
+    onSuccess: (_, variables) => {
+      message.success(variables.status === 'accepted' ? '预览已验收通过' : '预览状态已更新');
+      void queryClient.invalidateQueries({ queryKey: ['run-preview-sessions', selectedRunId] });
+      if (activeProjectId) {
+        void queryClient.invalidateQueries({ queryKey: ['runs', activeProjectId] });
+      }
+    },
+    onError: (error: Error) => message.error(error.message || '更新预览验收状态失败'),
+  });
 
   const completionData = completionQuery.data as PipelineCompletion | undefined;
   const selectedRun = runQuery.data as PipelineRun | undefined;
   const residualItems = residualItemsQuery.data ?? [];
+  const previewSessions = previewSessionsQuery.data ?? [];
   const approvalGates = approvalGatesQuery.data ?? [];
   const latestAgentEvaluation = agentRunQuery.data?.latest_evaluation ?? agentEvaluationsQuery.data?.at(-1);
   const pendingApprovalToolCall = findPendingApprovalToolCall(
@@ -780,6 +814,15 @@ export default function PipelinePage() {
                 onResolveResidual={(itemId) => updateResidualItemMutation.mutate({ itemId, status: 'resolved' })}
                 resolvingItemId={updateResidualItemMutation.variables?.itemId}
               />
+
+              <PreviewAcceptanceCard
+                previewSessions={previewSessions}
+                loading={previewSessionsQuery.isLoading}
+                apiBase={apiBase}
+                onAccept={(sessionId) => updatePreviewSessionMutation.mutate({ sessionId, status: 'accepted' })}
+                onReject={(sessionId) => updatePreviewSessionMutation.mutate({ sessionId, status: 'rejected' })}
+                updatingSessionId={updatePreviewSessionMutation.variables?.sessionId}
+              />
             </Space>
           </Col>
         </Row>
@@ -1000,6 +1043,27 @@ function statusColor(status?: string) {
   }
 }
 
+function previewSessionStatusColor(status?: string) {
+  switch ((status || '').toLowerCase()) {
+    case 'accepted':
+      return 'green';
+    case 'rejected':
+      return 'red';
+    default:
+      return 'blue';
+  }
+}
+
+function buildAbsolutePreviewHref(apiBase: string, previewUrl?: string) {
+  if (!previewUrl) {
+    return '';
+  }
+  if (/^https?:\/\//.test(previewUrl)) {
+    return previewUrl;
+  }
+  return `${apiBase}${previewUrl}`;
+}
+
 function residualSeverityColor(severity?: string) {
   switch ((severity || '').toLowerCase()) {
     case 'critical':
@@ -1124,6 +1188,64 @@ function RunFollowupsCard({
               </Space>
             </div>
           ) : null}
+        </Space>
+      )}
+    </Card>
+  );
+}
+
+function PreviewAcceptanceCard({
+  previewSessions,
+  loading,
+  apiBase,
+  onAccept,
+  onReject,
+  updatingSessionId,
+}: {
+  previewSessions: PreviewSession[];
+  loading: boolean;
+  apiBase: string;
+  onAccept: (sessionId: string) => void;
+  onReject: (sessionId: string) => void;
+  updatingSessionId?: string;
+}) {
+  const latestSessions = [...previewSessions].sort((left, right) => dayjs(right.updated_at).valueOf() - dayjs(left.updated_at).valueOf());
+
+  return (
+    <Card title="预览与验收" style={{ borderRadius: 20 }} loading={loading}>
+      {!latestSessions.length ? (
+        <Empty description="当前运行尚未生成可追踪的预览会话" />
+      ) : (
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Tag color="blue">Preview Sessions {latestSessions.length}</Tag>
+          {latestSessions.map((session) => {
+            const previewHref = buildAbsolutePreviewHref(apiBase, session.preview_url);
+            const pending = updatingSessionId === session.id;
+            return (
+              <div key={session.id} style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12 }}>
+                <Space wrap>
+                  <Tag color={previewSessionStatusColor(session.status)}>{session.status}</Tag>
+                  <Typography.Text strong>{session.title}</Typography.Text>
+                  <Typography.Text code>{session.preview_type || 'html'}</Typography.Text>
+                  <Typography.Text type="secondary">{dayjs(session.updated_at).format('YYYY-MM-DD HH:mm:ss')}</Typography.Text>
+                </Space>
+                <Typography.Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 8 }}>
+                  {session.reviewer_note || '等待人工预览确认；确认通过后可视为最终预览版。'}
+                </Typography.Paragraph>
+                <Space wrap style={{ marginTop: 8 }}>
+                  {previewHref ? (
+                    <Button onClick={() => window.open(previewHref, '_blank', 'noopener,noreferrer')}>打开预览</Button>
+                  ) : null}
+                  <Button type="primary" onClick={() => onAccept(session.id)} loading={pending} disabled={session.status === 'accepted'}>
+                    验收通过
+                  </Button>
+                  <Button danger onClick={() => onReject(session.id)} loading={pending} disabled={session.status === 'rejected'}>
+                    退回修改
+                  </Button>
+                </Space>
+              </div>
+            );
+          })}
         </Space>
       )}
     </Card>

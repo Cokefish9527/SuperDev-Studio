@@ -1279,6 +1279,123 @@ func TestPipelineCompletionAndPreviewEndpoints(t *testing.T) {
 	}
 }
 
+func TestRunPreviewSessionsSyncFromCompletion(t *testing.T) {
+	env := newAPITestEnv(t)
+	project := createProjectViaAPI(t, env.handler, "PreviewSessions")
+	projectDir := filepath.Join(t.TempDir(), "preview-session-project")
+	frontendDir := filepath.Join(projectDir, "output", "frontend")
+	if err := os.MkdirAll(frontendDir, 0o755); err != nil {
+		t.Fatalf("create frontend output dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<!doctype html><html><body>preview session</body></html>"), 0o644); err != nil {
+		t.Fatalf("write preview index: %v", err)
+	}
+
+	run, err := env.store.CreatePipelineRun(context.Background(), store.PipelineRun{
+		ProjectID:       project.ID,
+		Prompt:          "生成一个可预览的交付版本",
+		ProjectDir:      projectDir,
+		Simulate:        false,
+		MemoryWriteback: true,
+		Status:          "completed",
+		Progress:        100,
+		Stage:           "done",
+	})
+	if err != nil {
+		t.Fatalf("seed completed run: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/pipeline/runs/"+run.ID+"/preview-sessions", nil)
+	res := httptest.NewRecorder()
+	env.handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", res.Code, res.Body.String())
+	}
+	var response struct {
+		Items []store.PreviewSession `json:"items"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode preview sessions response: %v", err)
+	}
+	if len(response.Items) != 1 {
+		t.Fatalf("expected 1 preview session, got %#v", response.Items)
+	}
+	if response.Items[0].PreviewURL == "" {
+		t.Fatalf("expected preview_url to be persisted")
+	}
+	if response.Items[0].Status != "generated" {
+		t.Fatalf("expected generated preview session, got %q", response.Items[0].Status)
+	}
+}
+
+func TestUpdatePreviewSessionEndpointMarksAccepted(t *testing.T) {
+	env := newAPITestEnv(t)
+	project := createProjectViaAPI(t, env.handler, "PreviewAcceptance")
+	projectDir := filepath.Join(t.TempDir(), "preview-acceptance-project")
+	frontendDir := filepath.Join(projectDir, "output", "frontend")
+	if err := os.MkdirAll(frontendDir, 0o755); err != nil {
+		t.Fatalf("create frontend output dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<!doctype html><html><body>acceptance preview</body></html>"), 0o644); err != nil {
+		t.Fatalf("write preview index: %v", err)
+	}
+
+	run, err := env.store.CreatePipelineRun(context.Background(), store.PipelineRun{
+		ProjectID:       project.ID,
+		Prompt:          "生成一个可验收的交付版本",
+		ProjectDir:      projectDir,
+		Simulate:        false,
+		MemoryWriteback: true,
+		Status:          "completed",
+		Progress:        100,
+		Stage:           "done",
+	})
+	if err != nil {
+		t.Fatalf("seed completed run: %v", err)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/pipeline/runs/"+run.ID+"/preview-sessions", nil)
+	listRes := httptest.NewRecorder()
+	env.handler.ServeHTTP(listRes, listReq)
+	if listRes.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", listRes.Code, listRes.Body.String())
+	}
+	var listResponse struct {
+		Items []store.PreviewSession `json:"items"`
+	}
+	if err := json.Unmarshal(listRes.Body.Bytes(), &listResponse); err != nil {
+		t.Fatalf("decode preview sessions response: %v", err)
+	}
+	if len(listResponse.Items) == 0 {
+		t.Fatalf("expected preview session to exist")
+	}
+	sessionID := listResponse.Items[0].ID
+	updatePayload, _ := json.Marshal(map[string]any{
+		"status":        "accepted",
+		"reviewer_note": "Preview accepted for pre-release handoff",
+	})
+	updateReq := httptest.NewRequest(http.MethodPatch, "/api/preview-sessions/"+sessionID, bytes.NewReader(updatePayload))
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateRes := httptest.NewRecorder()
+	env.handler.ServeHTTP(updateRes, updateReq)
+	if updateRes.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", updateRes.Code, updateRes.Body.String())
+	}
+	var updated store.PreviewSession
+	if err := json.Unmarshal(updateRes.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("decode updated preview session: %v", err)
+	}
+	if updated.Status != "accepted" {
+		t.Fatalf("expected accepted status, got %q", updated.Status)
+	}
+	if updated.ReviewerNote != "Preview accepted for pre-release handoff" {
+		t.Fatalf("expected reviewer note to persist, got %q", updated.ReviewerNote)
+	}
+	if updated.ReviewedAt == nil {
+		t.Fatalf("expected reviewed_at to be populated")
+	}
+}
+
 func TestProjectAgentBundleEndpoint(t *testing.T) {
 	env := newAPITestEnv(t)
 	repoRoot := t.TempDir()

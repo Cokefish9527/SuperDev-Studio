@@ -241,3 +241,113 @@
 2. 接入 `super-dev task run` / `super-dev quality --type all` 的自动 repair loop
 3. 新增 `preview_sessions` 与最终验收记录
 4. 在简单交付页合并“需求确认 + 交付进展 + 验收结果”主链路
+
+---
+
+# Preview Acceptance Loop - 执行报告（2026-03-10）
+
+## 本轮目标
+
+完成“预览会话持久化 -> 预览历史可追踪 -> 人工验收确认”的闭环，补齐交付末端的预览与验收能力。
+
+## 已完成内容
+
+### 1. 预览会话持久化
+
+- 新增 `preview_sessions` 数据模型与数据库表。
+- 新增 `backend/internal/store/preview_sessions.go`，支持：
+  - preview session upsert
+  - project/run 维度列表查询
+  - 验收状态更新（`generated / accepted / rejected`）
+- 系统会基于 `pipeline completion` 自动提取主预览 URL 并写入 preview session。
+
+### 2. 预览与验收 API
+
+- 新增 API：
+  - `GET /api/projects/{projectID}/preview-sessions`
+  - `GET /api/pipeline/runs/{runID}/preview-sessions`
+  - `PATCH /api/preview-sessions/{sessionID}`
+- run 级接口会在返回前自动同步 preview session，保证页面拿到的是最新预览状态。
+
+### 3. PipelinePage 验收入口
+
+- `PipelinePage` 新增“预览与验收”卡片。
+- 支持直接看到：
+  - 当前 run 的 preview session 列表
+  - 预览状态
+  - 预览更新时间
+  - 评审备注
+- 支持操作：
+  - 打开预览
+  - 验收通过
+  - 退回修改
+
+### 4. 覆盖测试
+
+- 新增 API 测试，覆盖：
+  - completed run 可自动同步 preview session
+  - `PATCH /api/preview-sessions/{id}` 可将预览标记为 accepted
+
+## 验证结果
+
+### 后端
+
+执行：
+
+- `go test ./internal/store ./internal/api -run 'Preview|Completion'`
+
+结果：通过。
+
+### 前端
+
+执行：
+
+- `npm run build`
+
+结果：通过。
+
+## 本轮涉及文件
+
+- `backend/internal/api/preview_sessions.go`
+- `backend/internal/api/server.go`
+- `backend/internal/api/server_test.go`
+- `backend/internal/store/models.go`
+- `backend/internal/store/preview_sessions.go`
+- `backend/internal/store/store.go`
+- `frontend/src/api/client.ts`
+- `frontend/src/pages/PipelinePage.tsx`
+- `frontend/src/pages/PipelinePage.test.tsx`
+- `frontend/src/types.ts`
+- `.super-dev/changes/preview-acceptance-loop/tasks.md`
+
+## 当前仍未完成的重点能力
+
+### 1. 自动派工与 repair loop
+
+当前系统已经能：
+
+- 生成需求草案
+- 启动交付
+- 跟踪 residual / approval gate / preview acceptance
+
+但还未完全做到：
+
+- LLM 根据残留项自动决定下一条 `super-dev` 命令
+- 自动触发下一轮 `task run / quality / preview`
+- 直到产品完成前持续推进而非主要依赖人工点击
+
+### 2. 极简主流程进一步收敛
+
+目前普通用户的主路径还可继续收敛为：
+
+- 输入一句需求
+- 确认系统理解
+- 查看结果 / 预览 / 剩余问题 / 验收状态
+
+## 建议下一步
+
+建议下一阶段优先推进：
+
+1. 将 `residual_items + approval_gates + preview_sessions` 汇总为统一 delivery checklist
+2. 让 LLM evaluator 输出 `next_command` 并自动驱动下一轮 `super-dev`
+3. 在 `SimpleDeliveryPage` 合并“交付结果 + 预览验收 + 剩余问题”三段式主链路

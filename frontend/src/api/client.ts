@@ -14,6 +14,7 @@ import type {
   Memory,
   PipelineCompletion,
   ProjectAdvanceResponse,
+  PreviewSession,
   PipelineRun,
   Project,
   ProjectAgentBundle,
@@ -199,10 +200,14 @@ export const apiClient = {
     unwrapItems<AgentEvaluation>(api.get(`/api/pipeline/runs/${runId}/agent/evaluations`)),
   listRunResidualItems: async (runId: string, limit = 100) =>
     unwrapItems<ResidualItem>(api.get(`/api/pipeline/runs/${runId}/residual-items`, { params: { limit } })),
+  listRunPreviewSessions: async (runId: string, limit = 100) =>
+    unwrapItems<PreviewSession>(api.get(`/api/pipeline/runs/${runId}/preview-sessions`, { params: { limit } })),
   listRunApprovalGates: async (runId: string, limit = 100) =>
     unwrapItems<ApprovalGate>(api.get(`/api/pipeline/runs/${runId}/approval-gates`, { params: { limit } })),
   updateResidualItem: async (itemId: string, payload: { status: 'open' | 'resolved' | 'waived'; resolution_note?: string }) =>
     (await api.patch<ResidualItem>(`/api/residual-items/${itemId}`, payload)).data,
+  updatePreviewSession: async (sessionId: string, payload: { status: 'generated' | 'accepted' | 'rejected'; reviewer_note?: string }) =>
+    (await api.patch<PreviewSession>(`/api/preview-sessions/${sessionId}`, payload)).data,
   listRunEvents: async (runId: string) => unwrapItems<RunEvent>(api.get(`/api/pipeline/runs/${runId}/events`)),
   listRuns: async (projectId: string, limit = 20) =>
     unwrapItems<PipelineRun>(api.get(`/api/projects/${projectId}/pipeline-runs`, { params: { limit } })),
