@@ -105,6 +105,11 @@ describe('DeliveryHandoffCard', () => {
     expect(screen.getByText('Quality gate passed on iteration 1')).toBeInTheDocument();
     expect(screen.getByText('Artifacts')).toBeInTheDocument();
     expect(screen.getByText('4 files')).toBeInTheDocument();
+    expect(screen.getByTestId('delivery-handoff-acceptance')).toHaveTextContent('Ready for sign-off');
+    expect(screen.getByTestId('delivery-handoff-acceptance')).toHaveTextContent('Review the latest final preview and confirm the page matches the approved requirement.');
+    expect(screen.getByTestId('delivery-handoff-local-preview')).toHaveTextContent('python -m http.server 4173 --directory "D:/Work/output"');
+    expect(screen.getByTestId('delivery-handoff-local-preview')).toHaveTextContent('http://127.0.0.1:4173/frontend/index.html');
+    expect(screen.getByTestId('delivery-handoff-local-preview')).toHaveTextContent('output/frontend/index.html');
     expect(screen.getAllByRole('button').length).toBeGreaterThanOrEqual(4);
   });
 
@@ -166,5 +171,7 @@ describe('DeliveryHandoffCard', () => {
     expect(screen.getByTestId('delivery-handoff-alert')).toHaveTextContent('Release handoff is blocked');
     expect(screen.getAllByText('1 approval gate(s) still need human review.').length).toBeGreaterThan(0);
     expect(screen.getByText('1 residual item(s) still need follow-up.')).toBeInTheDocument();
+    expect(screen.getByTestId('delivery-handoff-acceptance')).toHaveTextContent('Resolve the blocked checks before requesting final sign-off.');
+    expect(screen.getByTestId('delivery-handoff-local-preview')).toHaveTextContent('python -m http.server 4173 --directory "D:/Work/output"');
   });
 });

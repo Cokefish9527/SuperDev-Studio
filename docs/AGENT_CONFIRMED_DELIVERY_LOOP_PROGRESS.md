@@ -915,3 +915,98 @@ The page still needs a more explicit finish line for:
 
 The system can already show more evidence from each run, but it still needs tighter LLM + `super-dev` scheduling so residual issues can be dispatched and resolved automatically until acceptance conditions are met.
 
+
+# Agent Confirmed Delivery Loop - Execution Report (2026-03-11 / Final Handoff)
+
+## Goal
+
+Finish the simplified delivery result page with stronger final acceptance guidance and local preview / handoff instructions so the user can complete the last review step from the same page.
+
+## Delivered in this phase
+
+### 1. Final acceptance guidance on the simplified page
+
+- `frontend/src/components/pipeline/DeliveryHandoffCard.tsx` now includes a dedicated `Final acceptance` section.
+- The section explains the next step depending on the current delivery state:
+  - ready for sign-off
+  - blocked
+  - still preparing
+- This makes the simplified page more explicit about what the user should do after preview, quality, and package checks are shown.
+
+### 2. Local preview / handoff instructions
+
+- The handoff card now also exposes a `Local preview / handoff` section with:
+  - output directory
+  - suggested local serve command
+  - suggested local browser URL
+  - preview file path when available
+- Users can now inspect both hosted preview and packaged local output from the same delivery result context.
+
+### 3. Coverage and verification updates
+
+- Updated tests in:
+  - `frontend/src/components/pipeline/DeliveryHandoffCard.test.tsx`
+  - `frontend/src/pages/SimpleDeliveryPage.test.tsx`
+- Validation completed with focused tests, related regression suite, production build, and the standard `super-dev` quality / archive flow.
+
+## Validation
+
+### Frontend tests
+
+Executed:
+
+- `npm test -- src/components/pipeline/DeliveryHandoffCard.test.tsx src/pages/SimpleDeliveryPage.test.tsx`
+- `npm test -- src/components/pipeline/DeliveryHandoffCard.test.tsx src/components/pipeline/DeliveryProcessPreviewCard.test.tsx src/components/pipeline/DeliveryLedgerCard.test.tsx src/components/pipeline/AutonomyActivityCard.test.tsx src/components/pipeline/PipelineArtifactPreviewPanel.test.tsx src/pages/SimpleDeliveryPage.test.tsx src/pages/PipelinePage.test.tsx`
+
+Result: passed, including `21/21` related regression tests.
+
+### Frontend build
+
+Executed:
+
+- `npm run build`
+
+Result: passed.
+
+### Super Dev pipeline
+
+Executed:
+
+- `super-dev task status simple-delivery-final-handoff`
+- `super-dev task run simple-delivery-final-handoff`
+- `super-dev quality --type all`
+- `super-dev spec archive simple-delivery-final-handoff`
+
+Result:
+
+- Task completion: `4/4`
+- Quality gate: `87/100`
+- Archive path: `.super-dev/archive/simple-delivery-final-handoff/`
+
+## Remaining priorities
+
+### 1. Simplify the final result surface even more
+
+The simplified page now includes:
+
+- requirement input
+- draft confirmation
+- auto-advance status
+- process-document preview
+- final preview entry
+- delivery handoff summary
+- final acceptance guidance
+- local preview / handoff instructions
+- autonomy activity summary
+- change-batch delivery ledger
+
+The next refinement is to reduce the feeling of multiple separate panels and make the end-state look more like one coherent acceptance cockpit.
+
+### 2. Add a persistent final acceptance marker if needed
+
+The page can now guide the user through final sign-off, but it still does not persist a dedicated final acceptance state. That can be added later if the product needs an explicit pre-release acceptance record.
+
+### 3. Keep strengthening autonomous closure
+
+The UI is now much closer to the desired result-review flow, but the runtime still needs tighter LLM + `super-dev` orchestration so residual issues can be dispatched automatically until the page naturally converges to sign-off ready.
+

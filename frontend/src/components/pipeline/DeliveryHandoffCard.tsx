@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Empty, Space, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Divider, Empty, Space, Tag, Typography } from 'antd';
 import type {
   ApprovalGate,
   PipelineArtifact,
@@ -18,6 +18,14 @@ type HandoffCheck = {
   note: string;
 };
 
+type LocalPreviewGuide = {
+  outputDir: string;
+  serveCommand: string;
+  localUrl: string;
+  previewFilePath?: string;
+  note: string;
+};
+
 type HandoffSummary = {
   overall: 'ready' | 'blocked' | 'in_progress';
   title: string;
@@ -25,6 +33,10 @@ type HandoffSummary = {
   checks: HandoffCheck[];
   packageArtifacts: PipelineArtifact[];
   previewHref: string;
+  acceptanceTitle: string;
+  acceptanceNote: string;
+  acceptanceSteps: string[];
+  localPreview?: LocalPreviewGuide;
 };
 
 type Props = {
@@ -131,7 +143,66 @@ function HandoffBody({ summary, apiBase }: { summary: HandoffSummary; apiBase: s
           </Space>
         )}
       </div>
+
+      <Divider style={{ margin: '4px 0' }} />
+
+      <div data-testid="delivery-handoff-acceptance">
+        <Space wrap style={{ marginBottom: 8 }}>
+          <Typography.Text strong>{summary.acceptanceTitle}</Typography.Text>
+          <Tag color={overallTagColor(summary.overall)}>{overallTagLabel(summary.overall)}</Tag>
+        </Space>
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+          {summary.acceptanceNote}
+        </Typography.Paragraph>
+        <Space orientation="vertical" size={4} style={{ width: '100%' }}>
+          {summary.acceptanceSteps.map((step, index) => (
+            <Typography.Paragraph key={`${index + 1}-${step}`} style={{ marginBottom: 0 }}>
+              {index + 1}. {step}
+            </Typography.Paragraph>
+          ))}
+        </Space>
+      </div>
+
+      <div data-testid="delivery-handoff-local-preview">
+        <Space wrap style={{ marginBottom: 8 }}>
+          <Typography.Text strong>Local preview / handoff</Typography.Text>
+          {summary.localPreview ? <Tag color="blue">Output ready</Tag> : <Tag>Pending</Tag>}
+        </Space>
+        {summary.localPreview ? (
+          <Space orientation="vertical" size={8} style={{ width: '100%' }}>
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+              {summary.localPreview.note}
+            </Typography.Paragraph>
+            <InfoRow label="Output dir" value={summary.localPreview.outputDir} />
+            <InfoRow label="Serve command" value={summary.localPreview.serveCommand} />
+            <InfoRow label="Local URL" value={summary.localPreview.localUrl} />
+            {summary.localPreview.previewFilePath ? <InfoRow label="Preview file" value={summary.localPreview.previewFilePath} /> : null}
+          </Space>
+        ) : (
+          <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+            Local preview guidance will appear once the run exposes an output directory.
+          </Typography.Paragraph>
+        )}
+      </div>
     </Space>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        border: '1px solid #e5e7eb',
+        borderRadius: 12,
+        padding: 10,
+        background: '#fff',
+      }}
+    >
+      <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>
+        {label}
+      </Typography.Text>
+      <Typography.Text code>{value}</Typography.Text>
+    </div>
   );
 }
 
@@ -160,38 +231,137 @@ function buildHandoffSummary({
   const packageCheck = buildPackageCheck(run, packageArtifacts);
   const checks = [previewCheck, qualityCheck, approvalCheck, residualCheck, packageCheck];
   const previewHref = buildArtifactHref(apiBase, completion?.preview_url);
+  const previewArtifact = pickPreviewArtifact(completion?.artifacts ?? []);
+  const localPreview = buildLocalPreviewGuide(completion, previewArtifact);
+
+  let overall: HandoffSummary['overall'] = 'in_progress';
+  let title = 'Release handoff is still in progress';
+  let description = 'Some checks are still running or waiting for a human decision before the handoff package is fully ready.';
 
   if (checks.some((check) => check.status === 'failed')) {
     const blocking = checks.find((check) => check.status === 'failed');
+    overall = 'blocked';
+    title = 'Release handoff is blocked';
+    description = blocking?.note || 'Resolve the blocking items before continuing to handoff.';
+  } else if (
+    run.status === 'completed' &&
+    previewCheck.status === 'completed' &&
+    qualityCheck.status === 'completed' &&
+    packageCheck.status === 'completed'
+  ) {
+    overall = 'ready';
+    title = 'Release handoff is ready';
+    description = 'Preview, quality, and package checks are complete. The run is ready for final review and pre-release handoff.';
+  }
+
+  const acceptance = buildAcceptanceGuidance(overall, previewHref, localPreview?.localUrl);
+
+  return {
+    overall,
+    title,
+    description,
+    checks,
+    packageArtifacts,
+    previewHref,
+    acceptanceTitle: acceptance.title,
+    acceptanceNote: acceptance.note,
+    acceptanceSteps: acceptance.steps,
+    localPreview,
+  };
+}
+
+function buildAcceptanceGuidance(
+  overall: HandoffSummary['overall'],
+  previewHref: string,
+  localPreviewUrl?: string,
+): { title: string; note: string; steps: string[] } {
+  if (overall === 'ready') {
     return {
-      overall: 'blocked',
-      title: 'Release handoff is blocked',
-      description: blocking?.note || 'Resolve the blocking items before continuing to handoff.',
-      checks,
-      packageArtifacts,
-      previewHref,
+      title: 'Final acceptance',
+      note: 'The run looks ready for final sign-off. Review the generated preview, verify the handoff package, and treat this build as the current release candidate.',
+      steps: [
+        previewHref
+          ? 'Review the latest final preview and confirm the page matches the approved requirement.'
+          : 'Review the latest packaged output before sign-off.',
+        'Check the quality, execution, and other handoff artifacts for anything that still needs clarification.',
+        localPreviewUrl
+          ? `If you want a local browser pass, serve the output directory and open ${localPreviewUrl}.`
+          : 'If you want a local browser pass, serve the output directory before sign-off.',
+      ],
     };
   }
 
-  if (run.status === 'completed' && previewCheck.status === 'completed' && qualityCheck.status === 'completed' && packageCheck.status === 'completed') {
+  if (overall === 'blocked') {
     return {
-      overall: 'ready',
-      title: 'Release handoff is ready',
-      description: 'Preview, quality, and package checks are complete. The run is ready for final review and pre-release handoff.',
-      checks,
-      packageArtifacts,
-      previewHref,
+      title: 'Final acceptance',
+      note: 'Resolve the blocked checks before requesting final sign-off.',
+      steps: [
+        'Clear open approvals and residual follow-up items first.',
+        previewHref
+          ? 'Re-review or regenerate the preview if the current output is not yet acceptable.'
+          : 'Wait until a reviewable preview is generated.',
+        'After the blocking items are cleared, re-check the handoff package and request sign-off again.',
+      ],
     };
   }
 
   return {
-    overall: 'in_progress',
-    title: 'Release handoff is still in progress',
-    description: 'Some checks are still running or waiting for a human decision before the handoff package is fully ready.',
-    checks,
-    packageArtifacts,
-    previewHref,
+    title: 'Final acceptance',
+    note: 'The run is still preparing the final handoff package.',
+    steps: [
+      'Wait for preview, quality, and package checks to finish converging.',
+      'Use the generated preview and process documents as they appear to monitor progress.',
+      localPreviewUrl
+        ? `Once you want a local browser check, serve the output directory and open ${localPreviewUrl}.`
+        : 'Once a preview artifact is generated, a local browser check path will appear here.',
+    ],
   };
+}
+
+function buildLocalPreviewGuide(completion: PipelineCompletion | undefined, previewArtifact?: PipelineArtifact): LocalPreviewGuide | undefined {
+  if (!completion?.output_dir) {
+    return undefined;
+  }
+
+  const previewFilePath = previewArtifact?.path;
+  const relativePath = previewFilePath ? normalizeLocalPreviewPath(completion.output_dir, previewFilePath) : '';
+
+  return {
+    outputDir: completion.output_dir,
+    serveCommand: `python -m http.server 4173 --directory "${completion.output_dir}"`,
+    localUrl: relativePath ? `http://127.0.0.1:4173/${relativePath}` : 'http://127.0.0.1:4173/',
+    previewFilePath,
+    note: relativePath
+      ? 'Run the command below, then open the local URL to inspect the packaged preview from the output directory.'
+      : 'Run the command below to browse the packaged output directory locally. The preview URL will become more specific once the final HTML artifact is available.',
+  };
+}
+
+function normalizeLocalPreviewPath(outputDir: string, previewPath: string) {
+  const normalizedOutput = trimTrailingSlashes(outputDir.replaceAll('\\', '/'));
+  let normalizedPreview = previewPath.replaceAll('\\', '/');
+
+  if (normalizedPreview.startsWith('./')) {
+    normalizedPreview = normalizedPreview.slice(2);
+  }
+  if (normalizedPreview.toLowerCase().startsWith(`${normalizedOutput.toLowerCase()}/`)) {
+    normalizedPreview = normalizedPreview.slice(normalizedOutput.length + 1);
+  }
+  if (normalizedPreview.toLowerCase().startsWith('output/')) {
+    normalizedPreview = normalizedPreview.slice('output/'.length);
+  }
+  while (normalizedPreview.startsWith('/')) {
+    normalizedPreview = normalizedPreview.slice(1);
+  }
+  return normalizedPreview;
+}
+
+function trimTrailingSlashes(value: string) {
+  let trimmed = value;
+  while (trimmed.endsWith('/')) {
+    trimmed = trimmed.slice(0, -1);
+  }
+  return trimmed;
 }
 
 function buildPreviewCheck(run: PipelineRun, completion: PipelineCompletion | undefined, previewSessions: PreviewSession[]): HandoffCheck {
@@ -264,9 +434,10 @@ function buildQualityCheck(run: PipelineRun, completion: PipelineCompletion | un
       key: 'quality',
       title: 'Quality',
       status: run.status === 'completed' ? 'completed' : 'in_progress',
-      note: run.status === 'completed'
-        ? 'Quality artifacts are available and the run completed successfully.'
-        : 'Quality artifacts are being generated for this run.',
+      note:
+        run.status === 'completed'
+          ? 'Quality artifacts are available and the run completed successfully.'
+          : 'Quality artifacts are being generated for this run.',
     };
   }
 
@@ -368,6 +539,10 @@ function pickPackageArtifacts(completion?: PipelineCompletion): PipelineArtifact
   return picked;
 }
 
+function pickPreviewArtifact(artifacts: PipelineArtifact[]) {
+  return artifacts.find((artifact) => isPreviewArtifact(artifact));
+}
+
 function isPreviewArtifact(artifact: PipelineArtifact) {
   const lowerPath = artifact.path.toLowerCase();
   return artifact.preview_type === 'html' || lowerPath.endsWith('preview.html') || lowerPath.endsWith('frontend/index.html');
@@ -410,6 +585,28 @@ function overallAlertType(status: HandoffSummary['overall']) {
       return 'warning';
     default:
       return 'info';
+  }
+}
+
+function overallTagColor(status: HandoffSummary['overall']) {
+  switch (status) {
+    case 'ready':
+      return 'green';
+    case 'blocked':
+      return 'red';
+    default:
+      return 'blue';
+  }
+}
+
+function overallTagLabel(status: HandoffSummary['overall']) {
+  switch (status) {
+    case 'ready':
+      return 'Ready for sign-off';
+    case 'blocked':
+      return 'Blocked';
+    default:
+      return 'Preparing';
   }
 }
 

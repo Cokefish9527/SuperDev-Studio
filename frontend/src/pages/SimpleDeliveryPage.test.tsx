@@ -589,6 +589,8 @@ describe('SimpleDeliveryPage', () => {
     expect(await screen.findByTestId('simple-delivery-autonomy-summary')).toHaveTextContent('Quality gate result updated');
     expect(await screen.findByTestId('simple-delivery-autonomy-card')).toHaveTextContent('Residual backlog re-evaluated: closed 1 historical item.');
     expect(screen.getByTestId('simple-delivery-autonomy-card')).toHaveTextContent('Quality gate passed on iteration 1');
+    expect(await screen.findByTestId('delivery-handoff-acceptance')).toHaveTextContent('The run is still preparing the final handoff package.');
+    expect(screen.getByTestId('delivery-handoff-local-preview')).toHaveTextContent('python -m http.server 4173 --directory "D:/Work/output"');
     expect(await screen.findByTestId('delivery-process-preview-card')).toHaveTextContent('superdev-studio-quality-gate.md');
     expect(screen.getByTestId('delivery-process-preview-card')).toHaveTextContent('superdev-studio-task-execution.md');
     await waitFor(() => {
