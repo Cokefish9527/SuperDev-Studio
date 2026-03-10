@@ -822,3 +822,96 @@ The product still needs a more complete user-facing finish line for:
 2. Bind the LLM evaluator more tightly to `super-dev` command dispatch for the residual-driven repair loop.
 3. Consolidate final acceptance, preview, and local-run guidance into one result-oriented surface.
 
+
+# Agent Confirmed Delivery Loop - Execution Report (2026-03-11 / Process Preview)
+
+## Goal
+
+Bring process-document preview and final preview entry directly into the simplified delivery page so users can review outputs without switching to the full operator-oriented pipeline page.
+
+## Delivered in this phase
+
+### 1. Simplified process-document preview card
+
+- Added `frontend/src/components/pipeline/DeliveryProcessPreviewCard.tsx`.
+- The new card prioritizes process-oriented completion artifacts such as quality reports, task execution reports, release-oriented docs, and other markdown/text evidence files.
+- Users can switch between highlighted documents directly inside the simplified result page.
+
+### 2. Inline final preview entry
+
+- The simplified page now exposes final preview actions directly in the result surface:
+  - open final preview in a new window
+  - show / hide inline preview
+- The inline preview uses the latest generated preview URL and keeps the user on the simplified page during review.
+
+### 3. Page integration and verification
+
+- `frontend/src/pages/SimpleDeliveryPage.tsx` now renders the process preview card in the delivery result area.
+- Added / updated coverage in:
+  - `frontend/src/components/pipeline/DeliveryProcessPreviewCard.test.tsx`
+  - `frontend/src/pages/SimpleDeliveryPage.test.tsx`
+- Validation completed with focused and regression frontend suites plus production build.
+
+## Validation
+
+### Frontend tests
+
+Executed:
+
+- `npm test -- src/components/pipeline/DeliveryProcessPreviewCard.test.tsx src/pages/SimpleDeliveryPage.test.tsx`
+- `npm test -- src/components/pipeline/DeliveryProcessPreviewCard.test.tsx src/components/pipeline/DeliveryLedgerCard.test.tsx src/components/pipeline/DeliveryHandoffCard.test.tsx src/components/pipeline/AutonomyActivityCard.test.tsx src/components/pipeline/PipelineArtifactPreviewPanel.test.tsx src/pages/SimpleDeliveryPage.test.tsx src/pages/PipelinePage.test.tsx`
+
+Result: passed, including `21/21` related regression tests.
+
+### Frontend build
+
+Executed:
+
+- `npm run build`
+
+Result: passed.
+
+### Super Dev pipeline
+
+Executed:
+
+- `super-dev task status simple-delivery-process-preview`
+- `super-dev task run simple-delivery-process-preview`
+- `super-dev quality --type all`
+- `super-dev spec archive simple-delivery-process-preview`
+
+Result:
+
+- Task completion: `4/4`
+- Quality gate: `87/100`
+- Archive path: `.super-dev/archive/simple-delivery-process-preview/`
+
+## Remaining priorities
+
+### 1. Keep compressing the simplified result journey
+
+The simplified page now includes:
+
+- requirement input
+- draft confirmation
+- auto-advance status
+- process-document preview
+- final preview entry
+- delivery handoff summary
+- autonomy activity summary
+- change-batch delivery ledger
+
+The next refinement is to make the end-user journey read even more directly as one compact review surface.
+
+### 2. Add stronger final acceptance and local-run guidance
+
+The page still needs a more explicit finish line for:
+
+- final acceptance confirmation
+- local preview / run guidance
+- handoff packaging in the same result context
+
+### 3. Continue strengthening the autonomous repair loop
+
+The system can already show more evidence from each run, but it still needs tighter LLM + `super-dev` scheduling so residual issues can be dispatched and resolved automatically until acceptance conditions are met.
+

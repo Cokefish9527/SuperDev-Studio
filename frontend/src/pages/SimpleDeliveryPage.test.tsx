@@ -1,6 +1,6 @@
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SimpleDeliveryPage from './SimpleDeliveryPage';
 import { apiClient } from '../api/client';
 import { renderWithProviders } from '../test/render';
@@ -33,9 +33,20 @@ vi.mock('../api/client', async (importOriginal) => {
 });
 
 describe('SimpleDeliveryPage', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   beforeEach(() => {
     localStorage.setItem('superdev-studio-active-project', 'project-1');
     vi.clearAllMocks();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        text: async () => 'Execution report body',
+      } as Response),
+    );
     vi.mocked(apiClient.getProject).mockResolvedValue({
       id: 'project-1',
       name: 'Studio',
@@ -308,12 +319,43 @@ describe('SimpleDeliveryPage', () => {
       created_at: '2026-03-10T00:00:00Z',
       updated_at: '2026-03-10T00:00:00Z',
     });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (input: RequestInfo | URL) => ({
+        ok: true,
+        text: async () =>
+          String(input).includes('quality-gate')
+            ? 'Quality gate passed on iteration 1 report'
+            : 'Execution report for preview review flow',
+      }) as Response),
+    );
     vi.mocked(apiClient.getRunCompletion).mockResolvedValue({
       run_id: 'run-preview',
       status: 'completed',
       output_dir: 'D:/Work/output',
       checklist: [],
-      artifacts: [],
+      artifacts: [
+        {
+          name: 'superdev-studio-quality-gate.md',
+          path: 'output/superdev-studio-quality-gate.md',
+          kind: 'markdown',
+          size_bytes: 320,
+          updated_at: '2026-03-10T00:00:45Z',
+          preview_url: '/api/pipeline/runs/run-preview/preview/superdev-studio-quality-gate.md',
+          preview_type: 'markdown',
+          stage: 'output',
+        },
+        {
+          name: 'superdev-studio-task-execution.md',
+          path: 'output/superdev-studio-task-execution.md',
+          kind: 'text',
+          size_bytes: 280,
+          updated_at: '2026-03-10T00:00:46Z',
+          preview_url: '/api/pipeline/runs/run-preview/preview/superdev-studio-task-execution.md',
+          preview_type: 'text',
+          stage: 'output',
+        },
+      ],
       stages: [],
       preview_url: '/api/pipeline/runs/run-preview/preview',
     });
@@ -547,6 +589,16 @@ describe('SimpleDeliveryPage', () => {
     expect(await screen.findByTestId('simple-delivery-autonomy-summary')).toHaveTextContent('Quality gate result updated');
     expect(await screen.findByTestId('simple-delivery-autonomy-card')).toHaveTextContent('Residual backlog re-evaluated: closed 1 historical item.');
     expect(screen.getByTestId('simple-delivery-autonomy-card')).toHaveTextContent('Quality gate passed on iteration 1');
+    expect(await screen.findByTestId('delivery-process-preview-card')).toHaveTextContent('superdev-studio-quality-gate.md');
+    expect(screen.getByTestId('delivery-process-preview-card')).toHaveTextContent('superdev-studio-task-execution.md');
+    await waitFor(() => {
+      expect(screen.getByText('Quality gate passed on iteration 1 report')).toBeInTheDocument();
+    });
+    await userEvent.click(screen.getByTestId('delivery-process-toggle-final-preview'));
+    expect(screen.getByTitle('delivery-process-final-preview')).toHaveAttribute(
+      'src',
+      'http://localhost:8080/api/pipeline/runs/run-preview/preview',
+    );
     expect(await screen.findByTestId('simple-delivery-ledger-card')).toHaveTextContent('Attempt 1');
     expect(screen.getByTestId('simple-delivery-ledger-card')).toHaveTextContent('Attempt 2');
     expect(screen.getByTestId('simple-delivery-ledger-card')).toHaveTextContent('Initial timeline notebook run');

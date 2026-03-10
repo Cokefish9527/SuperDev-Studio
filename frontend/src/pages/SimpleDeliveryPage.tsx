@@ -22,6 +22,7 @@ import { useNavigate } from 'react-router-dom';
 import AutonomyActivityCard from '../components/pipeline/AutonomyActivityCard';
 import DeliveryHandoffCard from '../components/pipeline/DeliveryHandoffCard';
 import DeliveryLedgerCard, { type DeliveryLedgerRunSignal } from '../components/pipeline/DeliveryLedgerCard';
+import DeliveryProcessPreviewCard from '../components/pipeline/DeliveryProcessPreviewCard';
 import { apiClient } from '../api/client';
 import { useProjectState } from '../state/project-context';
 import type {
@@ -860,6 +861,12 @@ export default function SimpleDeliveryPage() {
                 {openApprovalGateCount > 0 ? <Tag color="orange">{`${zh.approvalTagPrefix} ${openApprovalGateCount}`}</Tag> : null}
                 {openResidualCount > 0 ? <Tag color="gold">{`${zh.residualTagPrefix} ${openResidualCount}`}</Tag> : null}
               </Space>
+
+              <DeliveryProcessPreviewCard
+                completion={completionQuery.data}
+                apiBase={apiBase}
+                loading={completionQuery.isLoading}
+              />
 
               <DeliveryHandoffCard
                 run={run}
