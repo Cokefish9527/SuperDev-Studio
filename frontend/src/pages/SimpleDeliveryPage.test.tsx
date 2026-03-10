@@ -20,6 +20,7 @@ vi.mock('../api/client', async (importOriginal) => {
       confirmRequirementSession: vi.fn(),
       getRun: vi.fn(),
       getRunCompletion: vi.fn(),
+      listRunEvents: vi.fn(),
       getRunAgent: vi.fn(),
       listRunPreviewSessions: vi.fn(),
       listRunApprovalGates: vi.fn(),
@@ -64,6 +65,7 @@ describe('SimpleDeliveryPage', () => {
       artifacts: [],
       stages: [],
     });
+    vi.mocked(apiClient.listRunEvents).mockResolvedValue([]);
     vi.mocked(apiClient.getRunAgent).mockResolvedValue(undefined as never);
     vi.mocked(apiClient.listRunPreviewSessions).mockResolvedValue([]);
     vi.mocked(apiClient.listRunApprovalGates).mockResolvedValue([]);

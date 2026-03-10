@@ -578,3 +578,37 @@ Let the latest run automatically re-evaluate unresolved historical residual item
 1. Add a clearer final acceptance / pre-release handoff view for preview approval, quality outcome, and release package delivery.
 2. Make background dispatch and backlog shrink status more visible in the simplified user-facing pages.
 3. Add an optional change-batch backlog summary view if users need to inspect historical shrink trends instead of only the latest run.
+
+
+---
+
+# Agent Confirmed Delivery Loop - Progress Update (2026-03-11, final-acceptance-handoff-view)
+
+## Phase goal
+
+Add a clearer final acceptance / pre-release handoff view so users can quickly judge whether the latest delivery is ready to enter the pre-release handoff stage.
+
+## What is now complete
+
+- Added a shared `DeliveryHandoffCard` that summarizes:
+  - final preview
+  - quality gate
+  - approval blockers
+  - residual blockers
+  - delivery package readiness
+- Integrated the handoff view into `SimpleDeliveryPage`, so the minimal user flow now ends with a clearer release-readiness summary instead of only status tags and counts.
+- Integrated the same handoff view into `PipelinePage`, so detailed operators and simplified users see the same release decision framing.
+- Added frontend tests for ready and blocked handoff states, and verified both page tests plus production build.
+- This phase passed the Super Dev quality gate (`87/100`).
+
+## What this unlocks
+
+- users can now understand whether the product is actually ready for pre-release handoff without reading multiple scattered cards
+- the simplified page is closer to the intended product shape: input need -> confirm draft -> follow progress -> inspect final result
+- autonomous delivery now has a clearer human-facing end state for acceptance and handoff
+
+## Remaining broader roadmap after this phase
+
+1. Make background auto-advance and backlog-shrink activity more visible in the simplified result timeline.
+2. Add a change-batch level delivery ledger so users can review prior autonomous attempts and handoff outcomes.
+3. Add SOP/demo capture material once the end-to-end user flow is stable enough for formal walkthrough documentation.

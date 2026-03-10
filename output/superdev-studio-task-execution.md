@@ -1,6 +1,6 @@
 # Spec 任务执行报告
 
-- Change: `residual-backlog-shrink-loop`
+- Change: `final-acceptance-handoff-view`
 - 总任务: 5
 - 已完成: 5
 - 未完成: 0

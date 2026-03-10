@@ -19,6 +19,7 @@ import {
 import dayjs from 'dayjs';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import DeliveryHandoffCard from '../components/pipeline/DeliveryHandoffCard';
 import { apiClient } from '../api/client';
 import { useProjectState } from '../state/project-context';
 import type {
@@ -229,6 +230,7 @@ export default function SimpleDeliveryPage() {
     void queryClient.invalidateQueries({ queryKey: ['simple-run', runId] });
     void queryClient.invalidateQueries({ queryKey: ['simple-run-completion', runId] });
     void queryClient.invalidateQueries({ queryKey: ['simple-run-agent', runId] });
+    void queryClient.invalidateQueries({ queryKey: ['simple-run-events', runId] });
     void queryClient.invalidateQueries({ queryKey: ['simple-run-preview-sessions', runId] });
     void queryClient.invalidateQueries({ queryKey: ['simple-run-approval-gates', runId] });
     void queryClient.invalidateQueries({ queryKey: ['simple-run-residual-items', runId] });
@@ -253,6 +255,13 @@ export default function SimpleDeliveryPage() {
   const completionQuery = useQuery({
     queryKey: ['simple-run-completion', latestRunId],
     queryFn: () => apiClient.getRunCompletion(latestRunId),
+    enabled: !!latestRunId,
+    refetchInterval: latestRunId ? 5000 : false,
+  });
+
+  const eventsQuery = useQuery({
+    queryKey: ['simple-run-events', latestRunId],
+    queryFn: () => apiClient.listRunEvents(latestRunId),
     enabled: !!latestRunId,
     refetchInterval: latestRunId ? 5000 : false,
   });
@@ -741,6 +750,23 @@ export default function SimpleDeliveryPage() {
                 {openApprovalGateCount > 0 ? <Tag color="orange">{`${zh.approvalTagPrefix} ${openApprovalGateCount}`}</Tag> : null}
                 {openResidualCount > 0 ? <Tag color="gold">{`${zh.residualTagPrefix} ${openResidualCount}`}</Tag> : null}
               </Space>
+
+              <DeliveryHandoffCard
+                run={run}
+                completion={completionQuery.data}
+                events={eventsQuery.data ?? []}
+                previewSessions={previewSessions}
+                approvalGates={approvalGates}
+                residualItems={residualItems}
+                apiBase={apiBase}
+                loading={
+                  completionQuery.isLoading ||
+                  eventsQuery.isLoading ||
+                  previewSessionsQuery.isLoading ||
+                  approvalGatesQuery.isLoading ||
+                  residualItemsQuery.isLoading
+                }
+              />
             </Space>
           )}
         </Card>

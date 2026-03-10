@@ -25,6 +25,7 @@ import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { apiClient } from '../api/client';
 import PipelineArtifactPreviewPanel from '../components/pipeline/PipelineArtifactPreviewPanel';
+import DeliveryHandoffCard from '../components/pipeline/DeliveryHandoffCard';
 import PipelineChecklistCard from '../components/pipeline/PipelineChecklistCard';
 import PipelineStageBoardCard from '../components/pipeline/PipelineStageBoardCard';
 import PipelineTimelineCard from '../components/pipeline/PipelineTimelineCard';
@@ -844,6 +845,23 @@ export default function PipelinePage() {
                   </Space>
                 )}
               </Card>
+
+              <DeliveryHandoffCard
+                run={selectedRun}
+                completion={completionData}
+                events={eventsQuery.data ?? []}
+                previewSessions={previewSessions}
+                approvalGates={approvalGates}
+                residualItems={residualItems}
+                apiBase={apiBase}
+                loading={
+                  completionQuery.isLoading ||
+                  eventsQuery.isLoading ||
+                  previewSessionsQuery.isLoading ||
+                  approvalGatesQuery.isLoading ||
+                  residualItemsQuery.isLoading
+                }
+              />
 
               <RunFollowupsCard
                 residualItems={residualItems}
