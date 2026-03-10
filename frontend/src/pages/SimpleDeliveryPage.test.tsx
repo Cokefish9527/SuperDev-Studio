@@ -21,6 +21,7 @@ vi.mock('../api/client', async (importOriginal) => {
       getRun: vi.fn(),
       getRunCompletion: vi.fn(),
       listRunEvents: vi.fn(),
+      listRuns: vi.fn(),
       getRunAgent: vi.fn(),
       listRunPreviewSessions: vi.fn(),
       listRunApprovalGates: vi.fn(),
@@ -66,6 +67,7 @@ describe('SimpleDeliveryPage', () => {
       stages: [],
     });
     vi.mocked(apiClient.listRunEvents).mockResolvedValue([]);
+    vi.mocked(apiClient.listRuns).mockResolvedValue([]);
     vi.mocked(apiClient.getRunAgent).mockResolvedValue(undefined as never);
     vi.mocked(apiClient.listRunPreviewSessions).mockResolvedValue([]);
     vi.mocked(apiClient.listRunApprovalGates).mockResolvedValue([]);
@@ -386,6 +388,45 @@ describe('SimpleDeliveryPage', () => {
         created_at: '2026-03-10T00:00:50Z',
       },
     ]);
+    vi.mocked(apiClient.listRuns).mockResolvedValue([
+      {
+        id: 'run-initial',
+        project_id: 'project-1',
+        change_batch_id: 'change-1',
+        prompt: 'Initial timeline notebook run',
+        status: 'failed',
+        progress: 100,
+        stage: 'failed',
+        step_by_step: true,
+        created_at: '2026-03-10T00:00:00Z',
+        updated_at: '2026-03-10T00:00:20Z',
+      },
+      {
+        id: 'run-preview',
+        project_id: 'project-1',
+        change_batch_id: 'change-1',
+        prompt: 'Timeline notebook',
+        status: 'completed',
+        progress: 100,
+        stage: 'done',
+        step_by_step: true,
+        retry_of: 'run-initial',
+        created_at: '2026-03-10T00:00:21Z',
+        updated_at: '2026-03-10T00:00:50Z',
+      },
+      {
+        id: 'run-other',
+        project_id: 'project-1',
+        change_batch_id: 'change-2',
+        prompt: 'Other batch run',
+        status: 'completed',
+        progress: 100,
+        stage: 'done',
+        step_by_step: true,
+        created_at: '2026-03-10T00:00:10Z',
+        updated_at: '2026-03-10T00:00:15Z',
+      },
+    ]);
     vi.mocked(apiClient.updatePreviewSession).mockResolvedValue({
       id: 'preview-1',
       project_id: 'project-1',
@@ -427,6 +468,10 @@ describe('SimpleDeliveryPage', () => {
     expect(await screen.findByTestId('simple-delivery-autonomy-summary')).toHaveTextContent('Quality gate result updated');
     expect(await screen.findByTestId('simple-delivery-autonomy-card')).toHaveTextContent('Residual backlog re-evaluated: closed 1 historical item.');
     expect(screen.getByTestId('simple-delivery-autonomy-card')).toHaveTextContent('Quality gate passed on iteration 1');
+    expect(await screen.findByTestId('simple-delivery-ledger-card')).toHaveTextContent('Attempt 1');
+    expect(screen.getByTestId('simple-delivery-ledger-card')).toHaveTextContent('Attempt 2');
+    expect(screen.getByTestId('simple-delivery-ledger-card')).toHaveTextContent('Initial timeline notebook run');
+    expect(screen.getByTestId('simple-delivery-ledger-card')).not.toHaveTextContent('Other batch run');
 
     await userEvent.click(await screen.findByTestId('simple-delivery-preview-accept'));
 

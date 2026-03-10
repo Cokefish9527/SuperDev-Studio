@@ -21,6 +21,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import AutonomyActivityCard from '../components/pipeline/AutonomyActivityCard';
 import DeliveryHandoffCard from '../components/pipeline/DeliveryHandoffCard';
+import DeliveryLedgerCard from '../components/pipeline/DeliveryLedgerCard';
 import { apiClient } from '../api/client';
 import { useProjectState } from '../state/project-context';
 import type {
@@ -245,6 +246,7 @@ export default function SimpleDeliveryPage() {
 
   const latest = sessionBundle?.session;
   const latestRunId = activeRunIdOverride || latest?.latest_run_id || sessionBundle?.run?.id || '';
+  const latestChangeBatchId = latest?.latest_change_batch_id || sessionBundle?.change_batch?.id || sessionBundle?.run?.change_batch_id || '';
 
   const runQuery = useQuery({
     queryKey: ['simple-run', latestRunId],
@@ -293,6 +295,16 @@ export default function SimpleDeliveryPage() {
     queryFn: () => apiClient.listRunResidualItems(latestRunId),
     enabled: !!latestRunId,
     refetchInterval: latestRunId ? 5000 : false,
+  });
+
+  const changeBatchRunsQuery = useQuery({
+    queryKey: ['simple-change-batch-runs', activeProjectId, latestChangeBatchId],
+    queryFn: async () => {
+      if (!activeProjectId) throw new Error(zh.missingWorkspace);
+      return apiClient.listRuns(activeProjectId, 50);
+    },
+    enabled: !!activeProjectId && !!latestChangeBatchId,
+    refetchInterval: latestChangeBatchId ? 5000 : false,
   });
 
   const fetchSession = useMutation({
@@ -420,6 +432,13 @@ export default function SimpleDeliveryPage() {
   const previewHref = buildPreviewHref(apiBase, completionQuery.data?.preview_url || latestPreviewSession?.preview_url);
   const approvalGates = approvalGatesQuery.data ?? [];
   const residualItems = residualItemsQuery.data ?? [];
+  const deliveryLedgerRuns = useMemo(
+    () =>
+      (changeBatchRunsQuery.data ?? [])
+        .filter((item) => item.change_batch_id === latestChangeBatchId)
+        .sort((left, right) => dayjs(left.created_at).valueOf() - dayjs(right.created_at).valueOf()),
+    [changeBatchRunsQuery.data, latestChangeBatchId],
+  );
   const openApprovalGateCount = countOpenApprovalGates(approvalGates);
   const openResidualCount = countOpenResiduals(residualItems);
   const latestEvaluation = agentQuery.data?.latest_evaluation;
@@ -772,6 +791,15 @@ export default function SimpleDeliveryPage() {
               <AutonomyActivityCard
                 events={eventsQuery.data ?? []}
                 loading={eventsQuery.isLoading}
+              />
+
+              <DeliveryLedgerCard
+                batchId={latestChangeBatchId}
+                batchTitle={sessionBundle?.change_batch?.title || latest?.title}
+                mode={sessionBundle?.change_batch?.mode || (run?.full_cycle ? 'full_cycle' : run?.step_by_step ? 'step_by_step' : '')}
+                runs={deliveryLedgerRuns}
+                currentRunId={latestRunId}
+                loading={changeBatchRunsQuery.isLoading}
               />
             </Space>
           )}

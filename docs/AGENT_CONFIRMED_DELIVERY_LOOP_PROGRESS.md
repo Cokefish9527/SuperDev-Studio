@@ -674,3 +674,36 @@ Clean up garbled delivery UI copy so the handoff and follow-up views are underst
 1. Add a change-batch level delivery ledger so users can review prior autonomous attempts and outcomes.
 2. Unify the remaining delivery-related UI copy across other summary surfaces.
 3. Add SOP / demo capture material for the end-to-end flow once the product path is stable enough for a formal walkthrough.
+
+
+---
+
+# Agent Confirmed Delivery Loop - Progress Update (2026-03-11, change-batch-delivery-ledger)
+
+## Phase goal
+
+Expose multi-run delivery history for the active change batch on the simplified delivery page.
+
+## What is now complete
+
+- Added a dedicated `DeliveryLedgerCard` for the simplified delivery flow.
+- The ledger shows the active change batch's delivery attempts, including:
+  - attempt count
+  - latest status
+  - retry relationships
+  - current/latest markers
+- Integrated the ledger into `SimpleDeliveryPage` by reusing the existing project run list and filtering by the current `change_batch_id`.
+- Added component and page coverage, then re-verified the relevant page/component suites and production build.
+- This phase passed the Super Dev quality gate (`87/100`).
+
+## What this unlocks
+
+- users can now understand whether the system needed multiple autonomous retries to reach the current state
+- the simplified page is closer to a complete delivery cockpit rather than a single-run status card
+- multi-run convergence is now visible without switching into the operator-first pipeline board
+
+## Remaining broader roadmap after this phase
+
+1. Unify language across the simplified delivery result cards.
+2. Add richer per-run summary signals in the ledger, such as preview, quality, and residual status rollups.
+3. Add SOP / demo capture material for the end-to-end flow once the product path is stable enough for a formal walkthrough.
