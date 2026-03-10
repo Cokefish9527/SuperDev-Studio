@@ -129,3 +129,117 @@ func TestStore_SyncRequirementSessionsLatestRunByChangeBatch(t *testing.T) {
 		t.Fatalf("expected latest run id run-new, got %s", updated.LatestRunID)
 	}
 }
+
+func TestStore_ListOpenChangeBatchResidualItems(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	project, err := s.CreateProject(ctx, Project{Name: "ResidualBacklogQuery"})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	batch, err := s.CreateChangeBatch(ctx, ChangeBatch{
+		ProjectID: project.ID,
+		Title:     "Residual Batch",
+		Goal:      "Track historical residuals",
+		Status:    "running",
+		Mode:      "step_by_step",
+	})
+	if err != nil {
+		t.Fatalf("create change batch: %v", err)
+	}
+	includedRun, err := s.CreatePipelineRun(ctx, PipelineRun{
+		ProjectID:     project.ID,
+		ChangeBatchID: batch.ID,
+		Prompt:        "included",
+		Status:        "failed",
+		Progress:      100,
+		Stage:         "quality",
+	})
+	if err != nil {
+		t.Fatalf("create included run: %v", err)
+	}
+	excludedRun, err := s.CreatePipelineRun(ctx, PipelineRun{
+		ProjectID:     project.ID,
+		ChangeBatchID: batch.ID,
+		Prompt:        "excluded",
+		Status:        "completed",
+		Progress:      100,
+		Stage:         "preview",
+	})
+	if err != nil {
+		t.Fatalf("create excluded run: %v", err)
+	}
+	otherBatch, err := s.CreateChangeBatch(ctx, ChangeBatch{
+		ProjectID: project.ID,
+		Title:     "Other Batch",
+		Goal:      "Other work",
+		Status:    "running",
+		Mode:      "step_by_step",
+	})
+	if err != nil {
+		t.Fatalf("create other change batch: %v", err)
+	}
+	otherRun, err := s.CreatePipelineRun(ctx, PipelineRun{
+		ProjectID:     project.ID,
+		ChangeBatchID: otherBatch.ID,
+		Prompt:        "other batch",
+		Status:        "failed",
+		Progress:      100,
+		Stage:         "quality",
+	})
+	if err != nil {
+		t.Fatalf("create other run: %v", err)
+	}
+
+	if _, err := s.UpsertResidualItem(ctx, ResidualItem{
+		ProjectID:        project.ID,
+		PipelineRunID:    includedRun.ID,
+		Stage:            "quality",
+		Category:         "quality",
+		Severity:         "high",
+		Summary:          "Need more tests",
+		SuggestedCommand: "rerun",
+		SourceKey:        "sync:run:included:failed",
+		Status:           "open",
+	}); err != nil {
+		t.Fatalf("create included residual: %v", err)
+	}
+	if _, err := s.UpsertResidualItem(ctx, ResidualItem{
+		ProjectID:        project.ID,
+		PipelineRunID:    excludedRun.ID,
+		Stage:            "preview",
+		Category:         "preview",
+		Severity:         "medium",
+		Summary:          "Exclude current run",
+		SuggestedCommand: "rerun",
+		SourceKey:        "sync:run:excluded:preview-missing",
+		Status:           "open",
+	}); err != nil {
+		t.Fatalf("create excluded residual: %v", err)
+	}
+	if _, err := s.UpsertResidualItem(ctx, ResidualItem{
+		ProjectID:        project.ID,
+		PipelineRunID:    otherRun.ID,
+		Stage:            "quality",
+		Category:         "quality",
+		Severity:         "high",
+		Summary:          "Other batch residual",
+		SuggestedCommand: "rerun",
+		SourceKey:        "sync:run:other:failed",
+		Status:           "open",
+	}); err != nil {
+		t.Fatalf("create other residual: %v", err)
+	}
+
+	items, err := s.ListOpenChangeBatchResidualItems(ctx, batch.ID, excludedRun.ID, 10)
+	if err != nil {
+		t.Fatalf("list change-batch residual items: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 residual item, got %d", len(items))
+	}
+	if items[0].PipelineRunID != includedRun.ID {
+		t.Fatalf("expected residual from included run, got %s", items[0].PipelineRunID)
+	}
+}

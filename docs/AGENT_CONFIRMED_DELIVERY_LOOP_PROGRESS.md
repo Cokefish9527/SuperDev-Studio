@@ -547,3 +547,34 @@ The product can now continue the safe part of the delivery loop even when the us
 1. Let the evaluator continuously reassess unresolved residual items after each new run and actively shrink the backlog.
 2. Add a clearer final acceptance / release handoff view for preview approval, quality outcome, and pre-release package delivery.
 3. Make background dispatch status more visible in the UI timeline so users can see autonomous progress without opening the full pipeline trace.
+
+
+---
+
+# Agent Confirmed Delivery Loop - Progress Update (2026-03-10, residual-backlog-shrink-loop)
+
+## Phase goal
+
+Let the latest run automatically re-evaluate unresolved historical residual items in the same change batch so backlog state shrinks instead of accumulating across retry runs.
+
+## What is now complete
+
+- The backend can now query open historical residual items for the active `change_batch_id` while excluding the latest run.
+- `syncRunFollowups(...)` now performs latest-run-only backlog reconciliation after the current run residual snapshot is refreshed.
+- Historical sync-generated residual items are automatically:
+  - resolved when the issue is no longer present in the latest run
+  - superseded when the same issue still exists and has been carried forward into the latest run
+- The latest run timeline now records a `backlog-reconcile` event so autonomous reassessment is visible in the delivery trace.
+- This phase includes store and API tests plus a passing Super Dev quality gate (`87/100`).
+
+## What this unlocks
+
+- retry loops no longer leave stale open residual items behind on older runs
+- the latest run becomes the clean backlog focus for users and for later automation
+- autonomous evaluation can shrink historical backlog state before the next safe dispatch decision
+
+## Remaining broader roadmap after this phase
+
+1. Add a clearer final acceptance / pre-release handoff view for preview approval, quality outcome, and release package delivery.
+2. Make background dispatch and backlog shrink status more visible in the simplified user-facing pages.
+3. Add an optional change-batch backlog summary view if users need to inspect historical shrink trends instead of only the latest run.

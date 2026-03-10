@@ -159,6 +159,9 @@ func (s *Server) syncRunFollowups(ctx context.Context, run store.PipelineRun) er
 			}
 		}
 	}
+	if err := s.reconcileHistoricalResidualBacklog(ctx, run, residuals); err != nil {
+		return err
+	}
 
 	activeGates := make(map[string]struct{}, len(approvalGates))
 	for _, gate := range approvalGates {
@@ -272,6 +275,114 @@ func deriveResidualItems(run store.PipelineRun, agentRun *store.AgentRun, evalua
 		})
 	}
 	return items
+}
+
+func (s *Server) reconcileHistoricalResidualBacklog(ctx context.Context, run store.PipelineRun, currentResiduals []store.ResidualItem) error {
+	if !shouldReconcileResidualBacklog(run) || strings.TrimSpace(run.ChangeBatchID) == "" {
+		return nil
+	}
+	batch, err := s.store.GetChangeBatch(ctx, run.ChangeBatchID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if strings.TrimSpace(batch.LatestRunID) != run.ID {
+		return nil
+	}
+	historicalItems, err := s.store.ListOpenChangeBatchResidualItems(ctx, run.ChangeBatchID, run.ID, 200)
+	if err != nil {
+		return err
+	}
+	if len(historicalItems) == 0 {
+		return nil
+	}
+	activeKeys := make(map[string]struct{}, len(currentResiduals))
+	for _, item := range currentResiduals {
+		if !isSyncedResidualItem(item) {
+			continue
+		}
+		activeKeys[residualBacklogKey(item)] = struct{}{}
+	}
+	resolvedCount := 0
+	carriedCount := 0
+	for _, item := range historicalItems {
+		if !isSyncedResidualItem(item) {
+			continue
+		}
+		note := fmt.Sprintf("Resolved by latest run %s during backlog re-evaluation.", run.ID)
+		if _, ok := activeKeys[residualBacklogKey(item)]; ok {
+			note = fmt.Sprintf("Superseded by latest run %s during backlog re-evaluation.", run.ID)
+			carriedCount++
+		} else {
+			resolvedCount++
+		}
+		if _, err := s.store.UpdateResidualItemStatus(ctx, item.ID, "resolved", note); err != nil {
+			return err
+		}
+	}
+	closedCount := resolvedCount + carriedCount
+	if closedCount == 0 {
+		return nil
+	}
+	_, _ = s.store.AppendRunEvent(ctx, store.RunEvent{
+		RunID:   run.ID,
+		Stage:   "backlog-reconcile",
+		Status:  "completed",
+		Message: fmt.Sprintf("Residual backlog re-evaluated: closed %d historical items; %d resolved and %d carried forward into the latest run.", closedCount, resolvedCount, carriedCount),
+	})
+	return nil
+}
+
+func shouldReconcileResidualBacklog(run store.PipelineRun) bool {
+	switch strings.ToLower(strings.TrimSpace(run.Status)) {
+	case "completed", "failed", "awaiting_human":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSyncedResidualItem(item store.ResidualItem) bool {
+	return strings.HasPrefix(strings.TrimSpace(item.SourceKey), syncResidualPrefix)
+}
+
+func residualBacklogKey(item store.ResidualItem) string {
+	family := residualBacklogFamily(item.SourceKey)
+	summaryKey := ""
+	switch family {
+	case "missing", "need_human", "need_context":
+		summaryKey = normalizeResidualBacklogPart(item.Summary)
+	}
+	return strings.Join([]string{
+		family,
+		normalizeResidualBacklogPart(item.Category),
+		normalizeResidualBacklogPart(item.Stage),
+		summaryKey,
+	}, "|")
+}
+
+func residualBacklogFamily(sourceKey string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(sourceKey))
+	switch {
+	case strings.Contains(trimmed, ":missing:"):
+		return "missing"
+	case strings.HasSuffix(trimmed, ":need_human"):
+		return "need_human"
+	case strings.HasSuffix(trimmed, ":need_context"):
+		return "need_context"
+	case strings.HasSuffix(trimmed, ":failed"):
+		return "failed"
+	case strings.HasSuffix(trimmed, ":preview-missing"):
+		return "preview_missing"
+	default:
+		return normalizeResidualBacklogPart(trimmed)
+	}
+}
+
+func normalizeResidualBacklogPart(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
 }
 
 func deriveApprovalGates(run store.PipelineRun, toolCalls []store.AgentToolCall) []store.ApprovalGate {

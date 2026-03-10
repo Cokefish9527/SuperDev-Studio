@@ -1,8 +1,8 @@
 # Spec 任务执行报告
 
-- Change: `background-auto-advance-worker`
-- 总任务: 4
-- 已完成: 4
+- Change: `residual-backlog-shrink-loop`
+- 总任务: 5
+- 已完成: 5
 - 未完成: 0
 
 ## 自动修复记录

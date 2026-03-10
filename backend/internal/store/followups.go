@@ -183,6 +183,43 @@ func (s *Store) ListResidualItems(ctx context.Context, projectID, pipelineRunID 
 	return items, rows.Err()
 }
 
+func (s *Store) ListOpenChangeBatchResidualItems(ctx context.Context, changeBatchID, excludePipelineRunID string, limit int) ([]ResidualItem, error) {
+	if strings.TrimSpace(changeBatchID) == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	query := `SELECT
+			ri.id, ri.project_id, ri.pipeline_run_id, ri.agent_run_id, ri.stage, ri.category,
+			ri.severity, ri.summary, ri.evidence, ri.suggested_command, ri.source_key,
+			ri.status, ri.resolution_note, ri.resolved_at, ri.created_at, ri.updated_at
+		 FROM residual_items ri
+		 INNER JOIN pipeline_runs pr ON pr.id = ri.pipeline_run_id
+		 WHERE pr.change_batch_id=? AND ri.status='open'`
+	args := []any{changeBatchID}
+	if strings.TrimSpace(excludePipelineRunID) != "" {
+		query += ` AND ri.pipeline_run_id<>?`
+		args = append(args, excludePipelineRunID)
+	}
+	query += ` ORDER BY ri.updated_at DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]ResidualItem, 0, 8)
+	for rows.Next() {
+		var item ResidualItem
+		if err := scanResidualItem(rows, &item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *Store) UpdateResidualItemStatus(ctx context.Context, id, status, resolutionNote string) (ResidualItem, error) {
 	item, err := s.GetResidualItem(ctx, id)
 	if err != nil {
