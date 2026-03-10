@@ -34,6 +34,7 @@ import type {
   AgentEvidence,
   AgentStep,
   AgentToolCall,
+  ApprovalGate,
   ChangeBatch,
   PipelineArtifact,
   PipelineCompletion,
@@ -41,6 +42,7 @@ import type {
   PipelineRun,
   PipelineStage,
   Project,
+  ResidualItem,
 } from '../types';
 import { useProjectState } from '../state/project-context';
 
@@ -219,6 +221,24 @@ export default function PipelinePage() {
     enabled: agentEnabled,
     retry: false,
   });
+  const residualItemsQuery = useQuery({
+    queryKey: ['run-residual-items', selectedRunId],
+    queryFn: () => apiClient.listRunResidualItems(selectedRunId),
+    enabled: !!selectedRunId,
+    refetchInterval: () => {
+      const status = runQuery.data?.status;
+      return status === 'running' || status === 'queued' || status === 'awaiting_human' ? 2000 : false;
+    },
+  });
+  const approvalGatesQuery = useQuery({
+    queryKey: ['run-approval-gates', selectedRunId],
+    queryFn: () => apiClient.listRunApprovalGates(selectedRunId),
+    enabled: !!selectedRunId,
+    refetchInterval: () => {
+      const status = runQuery.data?.status;
+      return status === 'running' || status === 'queued' || status === 'awaiting_human' ? 2000 : false;
+    },
+  });
 
   const startMutation = useMutation({
     mutationFn: apiClient.startPipeline,
@@ -257,6 +277,8 @@ export default function PipelinePage() {
       void queryClient.invalidateQueries({ queryKey: ['run', run.id] });
       void queryClient.invalidateQueries({ queryKey: ['run-events', run.id] });
       void queryClient.invalidateQueries({ queryKey: ['run-completion', run.id] });
+      void queryClient.invalidateQueries({ queryKey: ['run-residual-items', run.id] });
+      void queryClient.invalidateQueries({ queryKey: ['run-approval-gates', run.id] });
     },
     onError: (error: Error) => message.error(error.message || '重试失败'),
   });
@@ -273,6 +295,8 @@ export default function PipelinePage() {
       void queryClient.invalidateQueries({ queryKey: ['run-agent', run.id] });
       void queryClient.invalidateQueries({ queryKey: ['run-agent-tool-calls', run.id] });
       void queryClient.invalidateQueries({ queryKey: ['run-agent-evaluations', run.id] });
+      void queryClient.invalidateQueries({ queryKey: ['run-residual-items', run.id] });
+      void queryClient.invalidateQueries({ queryKey: ['run-approval-gates', run.id] });
     },
     onError: (error: Error) => message.error(error.message || '恢复失败'),
   });
@@ -292,9 +316,35 @@ export default function PipelinePage() {
     },
     onError: (error: Error) => message.error(error.message || '确认失败'),
   });
+  const updateResidualItemMutation = useMutation({
+    mutationFn: ({
+      itemId,
+      status,
+      resolutionNote,
+    }: {
+      itemId: string;
+      status: 'open' | 'resolved' | 'waived';
+      resolutionNote?: string;
+    }) =>
+      apiClient.updateResidualItem(itemId, {
+        status,
+        resolution_note: resolutionNote,
+      }),
+    onSuccess: (_, variables) => {
+      message.success(variables.status === 'resolved' ? '残留项已标记为已解决' : '残留项状态已更新');
+      void queryClient.invalidateQueries({ queryKey: ['run-residual-items', selectedRunId] });
+      void queryClient.invalidateQueries({ queryKey: ['run-approval-gates', selectedRunId] });
+      if (activeProjectId) {
+        void queryClient.invalidateQueries({ queryKey: ['runs', activeProjectId] });
+      }
+    },
+    onError: (error: Error) => message.error(error.message || '更新残留项失败'),
+  });
 
   const completionData = completionQuery.data as PipelineCompletion | undefined;
   const selectedRun = runQuery.data as PipelineRun | undefined;
+  const residualItems = residualItemsQuery.data ?? [];
+  const approvalGates = approvalGatesQuery.data ?? [];
   const latestAgentEvaluation = agentRunQuery.data?.latest_evaluation ?? agentEvaluationsQuery.data?.at(-1);
   const pendingApprovalToolCall = findPendingApprovalToolCall(
     agentToolCallsQuery.data ?? [],
@@ -722,6 +772,14 @@ export default function PipelinePage() {
                   </Space>
                 )}
               </Card>
+
+              <RunFollowupsCard
+                residualItems={residualItems}
+                approvalGates={approvalGates}
+                loading={residualItemsQuery.isLoading || approvalGatesQuery.isLoading}
+                onResolveResidual={(itemId) => updateResidualItemMutation.mutate({ itemId, status: 'resolved' })}
+                resolvingItemId={updateResidualItemMutation.variables?.itemId}
+              />
             </Space>
           </Col>
         </Row>
@@ -942,6 +1000,19 @@ function statusColor(status?: string) {
   }
 }
 
+function residualSeverityColor(severity?: string) {
+  switch ((severity || '').toLowerCase()) {
+    case 'critical':
+      return 'red';
+    case 'high':
+      return 'volcano';
+    case 'medium':
+      return 'gold';
+    default:
+      return 'blue';
+  }
+}
+
 function agentVerdictColor(verdict?: string) {
   switch (verdict) {
     case 'pass':
@@ -970,7 +1041,97 @@ function formatRunMode(run: PipelineRun) {
   return 'super-dev';
 }
 
+function RunFollowupsCard({
+  residualItems,
+  approvalGates,
+  loading,
+  onResolveResidual,
+  resolvingItemId,
+}: {
+  residualItems: ResidualItem[];
+  approvalGates: ApprovalGate[];
+  loading: boolean;
+  onResolveResidual: (itemId: string) => void;
+  resolvingItemId?: string;
+}) {
+  const openResiduals = residualItems.filter((item) => item.status === 'open');
+  const openGates = approvalGates.filter((item) => item.status === 'open');
+
+  return (
+    <Card title="???????" style={{ borderRadius: 20 }} loading={loading}>
+      {!openResiduals.length && !openGates.length ? (
+        <Empty description="???????????" />
+      ) : (
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Space wrap>
+            <Tag color="volcano">Open Residuals {openResiduals.length}</Tag>
+            <Tag color="gold">Open Gates {openGates.length}</Tag>
+          </Space>
+
+          {openGates.length ? (
+            <div>
+              <Typography.Text strong>???</Typography.Text>
+              <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
+                {openGates.map((gate) => (
+                  <div key={gate.id} style={{ border: '1px solid #fcd34d', borderRadius: 12, padding: 12 }}>
+                    <Space wrap>
+                      <Tag color="gold">{gate.status}</Tag>
+                      <Typography.Text strong>{gate.title}</Typography.Text>
+                      {gate.tool_name ? <Typography.Text code>{gate.tool_name}</Typography.Text> : null}
+                      {gate.risk_level ? <Tag color="magenta">risk:{gate.risk_level}</Tag> : null}
+                    </Space>
+                    <Typography.Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 8 }}>
+                      {gate.detail}
+                    </Typography.Paragraph>
+                  </div>
+                ))}
+              </Space>
+            </div>
+          ) : null}
+
+          {openResiduals.length ? (
+            <div>
+              <Typography.Text strong>???</Typography.Text>
+              <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
+                {openResiduals.map((item) => (
+                  <div key={item.id} style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12 }}>
+                    <Space wrap>
+                      <Tag color={residualSeverityColor(item.severity)}>{item.severity}</Tag>
+                      <Tag>{item.category}</Tag>
+                      <Typography.Text strong>{item.summary}</Typography.Text>
+                    </Space>
+                    {item.evidence ? (
+                      <Typography.Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 8 }}>
+                        {item.evidence}
+                      </Typography.Paragraph>
+                    ) : null}
+                    {item.suggested_command ? (
+                      <Typography.Paragraph style={{ marginBottom: 0, marginTop: 8 }}>
+                        ?????<Typography.Text code>{item.suggested_command}</Typography.Text>
+                      </Typography.Paragraph>
+                    ) : null}
+                    <Space style={{ marginTop: 8 }}>
+                      <Button
+                        size="small"
+                        onClick={() => onResolveResidual(item.id)}
+                        loading={resolvingItemId === item.id}
+                      >
+                        ?????
+                      </Button>
+                    </Space>
+                  </div>
+                ))}
+              </Space>
+            </div>
+          ) : null}
+        </Space>
+      )}
+    </Card>
+  );
+}
+
 function AgentObservabilityCard({
+
   agentRun,
   steps,
   toolCalls,
@@ -1094,6 +1255,20 @@ function AgentObservabilityCard({
                   <Tag color={agentVerdictColor(item.verdict)}>{item.verdict}</Tag>
                   <Typography.Text>{item.reason}</Typography.Text>
                 </Space>
+                {item.acceptance_delta ? (
+                  <Typography.Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 8 }}>
+                    Acceptance delta: {item.acceptance_delta}
+                  </Typography.Paragraph>
+                ) : null}
+                {item.missing_items?.length ? (
+                  <Space wrap style={{ marginTop: 8 }}>
+                    {item.missing_items.map((missingItem) => (
+                      <Tag key={`${item.id}-${missingItem}`} color="orange">
+                        {missingItem}
+                      </Tag>
+                    ))}
+                  </Space>
+                ) : null}
                 {item.next_action ? (
                   <Typography.Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 8 }}>
                     Next: {item.next_action}

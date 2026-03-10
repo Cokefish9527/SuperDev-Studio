@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -261,15 +262,20 @@ func (s *Store) CreateAgentEvaluation(ctx context.Context, evaluation AgentEvalu
 	if evaluation.CreatedAt.IsZero() {
 		evaluation.CreatedAt = now
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO agent_evaluations(id, agent_step_id, evaluation_type, verdict, reason, next_action, created_at) VALUES(?,?,?,?,?,?,?)`, evaluation.ID, evaluation.AgentStepID, evaluation.EvaluationType, evaluation.Verdict, evaluation.Reason, evaluation.NextAction, formatTime(evaluation.CreatedAt))
+	missingItemsJSON, err := json.Marshal(compactNonEmptyStrings(evaluation.MissingItems))
 	if err != nil {
 		return AgentEvaluation{}, err
 	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO agent_evaluations(id, agent_step_id, evaluation_type, verdict, reason, next_action, missing_items_json, acceptance_delta, created_at) VALUES(?,?,?,?,?,?,?,?,?)`, evaluation.ID, evaluation.AgentStepID, evaluation.EvaluationType, evaluation.Verdict, evaluation.Reason, evaluation.NextAction, string(missingItemsJSON), evaluation.AcceptanceDelta, formatTime(evaluation.CreatedAt))
+	if err != nil {
+		return AgentEvaluation{}, err
+	}
+	evaluation.MissingItems = compactNonEmptyStrings(evaluation.MissingItems)
 	return evaluation, nil
 }
 
 func (s *Store) ListAgentEvaluations(ctx context.Context, agentRunID string) ([]AgentEvaluation, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT e.id, e.agent_step_id, e.evaluation_type, e.verdict, e.reason, e.next_action, e.created_at FROM agent_evaluations e JOIN agent_steps st ON st.id = e.agent_step_id WHERE st.agent_run_id=? ORDER BY e.created_at ASC`, agentRunID)
+	rows, err := s.db.QueryContext(ctx, `SELECT e.id, e.agent_step_id, e.evaluation_type, e.verdict, e.reason, e.next_action, e.missing_items_json, e.acceptance_delta, e.created_at FROM agent_evaluations e JOIN agent_steps st ON st.id = e.agent_step_id WHERE st.agent_run_id=? ORDER BY e.created_at ASC`, agentRunID)
 	if err != nil {
 		return nil, err
 	}
@@ -278,9 +284,16 @@ func (s *Store) ListAgentEvaluations(ctx context.Context, agentRunID string) ([]
 	for rows.Next() {
 		var item AgentEvaluation
 		var createdRaw string
-		if err := rows.Scan(&item.ID, &item.AgentStepID, &item.EvaluationType, &item.Verdict, &item.Reason, &item.NextAction, &createdRaw); err != nil {
+		var missingItemsRaw string
+		if err := rows.Scan(&item.ID, &item.AgentStepID, &item.EvaluationType, &item.Verdict, &item.Reason, &item.NextAction, &missingItemsRaw, &item.AcceptanceDelta, &createdRaw); err != nil {
 			return nil, err
 		}
+		if strings.TrimSpace(missingItemsRaw) != "" {
+			if err := json.Unmarshal([]byte(missingItemsRaw), &item.MissingItems); err != nil {
+				return nil, err
+			}
+		}
+		item.MissingItems = compactNonEmptyStrings(item.MissingItems)
 		item.CreatedAt, err = parseTime(createdRaw)
 		if err != nil {
 			return nil, err
@@ -288,6 +301,23 @@ func (s *Store) ListAgentEvaluations(ctx context.Context, agentRunID string) ([]
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func compactNonEmptyStrings(items []string) []string {
+	result := make([]string, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
 }
 
 func (s *Store) nextAgentStepIndex(ctx context.Context, agentRunID string) int {

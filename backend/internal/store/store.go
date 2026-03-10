@@ -60,6 +60,10 @@ var allowedSchemaMutations = map[string]map[string]string{
 		"start_date":     "TEXT",
 		"estimated_days": "INTEGER NOT NULL DEFAULT 0",
 	},
+	"agent_evaluations": {
+		"missing_items_json": "TEXT NOT NULL DEFAULT '[]'",
+		"acceptance_delta":   "TEXT NOT NULL DEFAULT ''",
+	},
 	"requirement_sessions": {
 		"latest_summary":         "TEXT NOT NULL DEFAULT ''",
 		"latest_prd":             "TEXT NOT NULL DEFAULT ''",
@@ -250,6 +254,8 @@ func (s *Store) migrate(ctx context.Context) error {
 			verdict TEXT NOT NULL,
 			reason TEXT NOT NULL DEFAULT '',
 			next_action TEXT NOT NULL DEFAULT '',
+			missing_items_json TEXT NOT NULL DEFAULT '[]',
+			acceptance_delta TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			FOREIGN KEY(agent_step_id) REFERENCES agent_steps(id) ON DELETE CASCADE
 		);`,
@@ -324,6 +330,44 @@ func (s *Store) migrate(ctx context.Context) error {
 			FOREIGN KEY(session_id) REFERENCES requirement_sessions(id) ON DELETE CASCADE,
 			FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
 		);`,
+		`CREATE TABLE IF NOT EXISTS residual_items (
+			id TEXT PRIMARY KEY,
+			project_id TEXT NOT NULL,
+			pipeline_run_id TEXT NOT NULL,
+			agent_run_id TEXT NOT NULL DEFAULT '',
+			stage TEXT NOT NULL DEFAULT '',
+			category TEXT NOT NULL DEFAULT 'dev',
+			severity TEXT NOT NULL DEFAULT 'medium',
+			summary TEXT NOT NULL DEFAULT '',
+			evidence TEXT NOT NULL DEFAULT '',
+			suggested_command TEXT NOT NULL DEFAULT '',
+			source_key TEXT NOT NULL UNIQUE,
+			status TEXT NOT NULL DEFAULT 'open',
+			resolution_note TEXT NOT NULL DEFAULT '',
+			resolved_at TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+			FOREIGN KEY(pipeline_run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS approval_gates (
+			id TEXT PRIMARY KEY,
+			project_id TEXT NOT NULL,
+			pipeline_run_id TEXT NOT NULL,
+			change_batch_id TEXT NOT NULL DEFAULT '',
+			gate_type TEXT NOT NULL DEFAULT 'tool_governance',
+			title TEXT NOT NULL DEFAULT '',
+			detail TEXT NOT NULL DEFAULT '',
+			tool_name TEXT NOT NULL DEFAULT '',
+			risk_level TEXT NOT NULL DEFAULT '',
+			source_key TEXT NOT NULL UNIQUE,
+			status TEXT NOT NULL DEFAULT 'open',
+			resolved_at TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+			FOREIGN KEY(pipeline_run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
+		);`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_change_batches_project_id ON change_batches(project_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_pipeline_runs_project_id ON pipeline_runs(project_id);`,
@@ -333,6 +377,8 @@ func (s *Store) migrate(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_requirement_sessions_project_id ON requirement_sessions(project_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_requirement_doc_versions_session_id ON requirement_doc_versions(session_id, version);`,
 		`CREATE INDEX IF NOT EXISTS idx_requirement_confirmations_session_id ON requirement_confirmations(session_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_residual_items_project_run ON residual_items(project_id, pipeline_run_id, status, updated_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_approval_gates_project_run ON approval_gates(project_id, pipeline_run_id, status, updated_at);`,
 	}
 
 	for _, stmt := range stmts {
@@ -348,6 +394,9 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureTaskColumns(ctx); err != nil {
+		return err
+	}
+	if err := s.ensureAgentEvaluationColumns(ctx); err != nil {
 		return err
 	}
 
@@ -430,6 +479,22 @@ func (s *Store) ensureTaskColumns(ctx context.Context) error {
 	}
 	for _, column := range columns {
 		if err := s.ensureTableColumn(ctx, "tasks", column.name, column.definition); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureAgentEvaluationColumns(ctx context.Context) error {
+	columns := []struct {
+		name       string
+		definition string
+	}{
+		{name: "missing_items_json", definition: "TEXT NOT NULL DEFAULT '[]'"},
+		{name: "acceptance_delta", definition: "TEXT NOT NULL DEFAULT ''"},
+	}
+	for _, column := range columns {
+		if err := s.ensureTableColumn(ctx, "agent_evaluations", column.name, column.definition); err != nil {
 			return err
 		}
 	}

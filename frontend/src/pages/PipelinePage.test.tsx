@@ -444,6 +444,8 @@ describe('PipelinePage', () => {
         verdict: 'need_human',
         reason: 'High-risk deploy action requires human confirmation before continuing.',
         next_action: 'Confirm deploy and continue execution.',
+        missing_items: ['等待人工确认高风险决策'],
+        acceptance_delta: '存在高风险决策，需人工确认后才能继续验收。',
         created_at: '2026-03-05T00:00:00Z',
       },
     });

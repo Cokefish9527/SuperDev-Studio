@@ -91,6 +91,8 @@ func (s *Server) Router() http.Handler {
 		r.Get("/{projectID}/knowledge/search", s.handleSearchKnowledge)
 		r.With(s.rateLimit(s.expensivePolicy("context-pack:build"))).Post("/{projectID}/context-pack", s.handleBuildContextPack)
 		r.Get("/{projectID}/pipeline-runs", s.handleListPipelineRuns)
+		r.Get("/{projectID}/residual-items", s.handleListProjectResidualItems)
+		r.Get("/{projectID}/approval-gates", s.handleListProjectApprovalGates)
 	})
 
 	r.With(s.rateLimit(s.mutationPolicy("tasks:update"))).Patch("/api/tasks/{taskID}", s.handleUpdateTask)
@@ -104,10 +106,13 @@ func (s *Server) Router() http.Handler {
 	r.Get("/api/pipeline/runs/{runID}/agent/tool-calls", s.handleListPipelineRunAgentToolCalls)
 	r.Get("/api/pipeline/runs/{runID}/agent/evidence", s.handleListPipelineRunAgentEvidence)
 	r.Get("/api/pipeline/runs/{runID}/agent/evaluations", s.handleListPipelineRunAgentEvaluations)
+	r.Get("/api/pipeline/runs/{runID}/residual-items", s.handleListRunResidualItems)
+	r.Get("/api/pipeline/runs/{runID}/approval-gates", s.handleListRunApprovalGates)
 	r.Get("/api/pipeline/runs/{runID}/completion", s.handleGetPipelineRunCompletion)
 	r.Get("/api/pipeline/runs/{runID}/preview", s.handlePreviewPipelineRunOutput)
 	r.Get("/api/pipeline/runs/{runID}/preview/*", s.handlePreviewPipelineRunOutput)
 	r.Get("/api/pipeline/runs/{runID}/events", s.handleListRunEvents)
+	r.With(s.rateLimit(s.mutationPolicy("residual-items:update"))).Patch("/api/residual-items/{itemID}", s.handleUpdateResidualItem)
 
 	return r
 }

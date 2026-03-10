@@ -110,3 +110,134 @@
 2. 将 Agent 评估结果自动转换为待修复项
 3. 在 `PipelinePage` / 简单入口展示“未完成项 / 已解决项 / 需人工确认项”
 4. 将 `super-dev task run` 与 `quality --type all` 串成可重复修复闭环
+
+---
+
+# Agent Confirmed Delivery Loop - 执行报告（2026-03-10）
+
+## 本轮目标
+
+完成“LLM 评估 -> 残留项/审批闸口持久化 -> PipelinePage 可追踪与人工闭环”的第二阶段落地。
+
+## 已完成内容
+
+### 1. 残留项与审批闸口持久化
+
+- 新增 `ResidualItem` 与 `ApprovalGate` 数据模型，并补齐数据库迁移能力。
+- 新增 `backend/internal/store/followups.go`，提供：
+  - 残留项 upsert / list / status update
+  - 审批闸口 upsert / list / auto resolve
+- Run 级别的 follow-up 状态不再只靠前端推断，而是落库存储，便于持续跟踪。
+
+### 2. 基于运行状态自动同步 follow-ups
+
+- 新增 `backend/internal/api/followups.go`，提供以下 API：
+  - `GET /api/projects/{projectID}/residual-items`
+  - `GET /api/projects/{projectID}/approval-gates`
+  - `GET /api/pipeline/runs/{runID}/residual-items`
+  - `GET /api/pipeline/runs/{runID}/approval-gates`
+  - `PATCH /api/residual-items/{itemID}`
+- 同步逻辑会根据当前 run / agent evaluation / tool approval 自动生成或更新：
+  - `need_context` -> requirement 类残留项
+  - `need_human` -> 高优先级残留项
+  - `awaiting_approval` 高风险工具调用 -> approval gate
+- `AgentEvaluation` 结构现已扩展为：
+  - `verdict`
+  - `reason`
+  - `next_action`
+  - `missing_items[]`
+  - `acceptance_delta`
+- `missing_items[]` 会进一步拆解为具体 residual items，避免“知道有问题但不知道差什么”。
+- 同步生成的旧残留项/旧 gate 在不再活跃时会自动转为已解决，避免页面长期残留脏状态。
+
+### 3. PipelinePage 跟进视图
+
+- `frontend/src/types.ts` 与 `frontend/src/api/client.ts` 已补齐 follow-up 类型与接口。
+- `frontend/src/pages/PipelinePage.tsx` 已接入：
+  - run residual items 查询
+  - run approval gates 查询
+  - 手动将 residual item 标记为 `resolved`
+- 页面现在可以直接看到：
+  - 当前未完成残留项
+  - 待人工确认的高风险闸口
+  - 人工关闭残留项后的即时刷新结果
+
+### 4. 覆盖测试
+
+- 新增 API 测试，覆盖：
+  - `need_context` 运行后可拉取 residual items
+  - 高风险 deploy 审批等待时可拉取 approval gates
+  - `PATCH /api/residual-items/{id}` 可将残留项标记为 resolved
+- 新增 Store 测试，覆盖 `missing_items` / `acceptance_delta` 的持久化与读取。
+
+## 验证结果
+
+### 后端
+
+执行：
+
+- `go test ./internal/store ./internal/api -run 'Residual|Approval|NeedContext|NeedHuman'`
+
+结果：通过。
+
+补充执行：
+
+- `go test ./...`
+
+结果：本轮改动相关包通过；但仓库内既有 `backend/src/main_test.go` 仍因 `searchHandler` / `analyticsHandler` / `notificationHandler` 缺失而失败，此问题与本轮 follow-up 改动无关。
+
+### 前端
+
+执行：
+
+- `npm run build`
+
+结果：通过。
+
+## 本轮涉及文件
+
+- `backend/internal/api/followups.go`
+- `backend/internal/api/server.go`
+- `backend/internal/api/server_test.go`
+- `backend/internal/store/followups.go`
+- `backend/internal/store/models.go`
+- `backend/internal/store/store.go`
+- `frontend/src/api/client.ts`
+- `frontend/src/pages/PipelinePage.tsx`
+- `frontend/src/types.ts`
+- `.super-dev/changes/agent-confirmed-delivery-loop/tasks.md`
+
+## 当前仍未完成的重点能力
+
+### 1. LLM + super-dev 的自动派工闭环
+
+当前已具备“评估 -> 残留跟踪 -> 人工关闭/审批”的基础能力，但仍未完全实现：
+
+- LLM 根据 `verdict / next_action / acceptance_delta` 决定下一条 `super-dev` 命令
+- 自动 repair loop（例如继续 `task run` / `quality` / `preview`）
+- 质量门禁失败后的残留聚合与再次派工
+
+### 2. 预览与验收闭环
+
+以下能力仍待补齐：
+
+- `preview_sessions` 持久化
+- 预览 URL / 预览快照的历史追踪
+- 最终验收页与“预上线版本”交付确认
+
+### 3. 面向普通用户的极简主流程收敛
+
+`SimpleDeliveryPage` 已完成第一阶段，但还可以继续收敛成更明确的三段式：
+
+- 输入需求
+- 确认系统理解
+- 查看交付结果 / 预览 / 剩余问题
+
+## 建议下一步
+
+下一阶段建议直接推进：
+
+1. 将 follow-up 结果回灌到 LLM evaluator，形成 `next_command` 决策
+2. 接入 `super-dev task run` / `super-dev quality --type all` 的自动 repair loop
+3. 新增 `preview_sessions` 与最终验收记录
+4. 在简单交付页合并“需求确认 + 交付进展 + 验收结果”主链路

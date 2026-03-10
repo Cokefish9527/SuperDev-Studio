@@ -149,13 +149,51 @@ type AgentEvidence struct {
 }
 
 type AgentEvaluation struct {
-	ID             string    `json:"id"`
-	AgentStepID    string    `json:"agent_step_id"`
-	EvaluationType string    `json:"evaluation_type"`
-	Verdict        string    `json:"verdict"`
-	Reason         string    `json:"reason"`
-	NextAction     string    `json:"next_action"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID              string    `json:"id"`
+	AgentStepID     string    `json:"agent_step_id"`
+	EvaluationType  string    `json:"evaluation_type"`
+	Verdict         string    `json:"verdict"`
+	Reason          string    `json:"reason"`
+	NextAction      string    `json:"next_action"`
+	MissingItems    []string  `json:"missing_items"`
+	AcceptanceDelta string    `json:"acceptance_delta"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+type ResidualItem struct {
+	ID               string     `json:"id"`
+	ProjectID        string     `json:"project_id"`
+	PipelineRunID    string     `json:"pipeline_run_id"`
+	AgentRunID       string     `json:"agent_run_id,omitempty"`
+	Stage            string     `json:"stage"`
+	Category         string     `json:"category"`
+	Severity         string     `json:"severity"`
+	Summary          string     `json:"summary"`
+	Evidence         string     `json:"evidence"`
+	SuggestedCommand string     `json:"suggested_command"`
+	SourceKey        string     `json:"source_key"`
+	Status           string     `json:"status"`
+	ResolutionNote   string     `json:"resolution_note"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+	ResolvedAt       *time.Time `json:"resolved_at,omitempty"`
+}
+
+type ApprovalGate struct {
+	ID            string     `json:"id"`
+	ProjectID     string     `json:"project_id"`
+	PipelineRunID string     `json:"pipeline_run_id"`
+	ChangeBatchID string     `json:"change_batch_id,omitempty"`
+	GateType      string     `json:"gate_type"`
+	Title         string     `json:"title"`
+	Detail        string     `json:"detail"`
+	ToolName      string     `json:"tool_name,omitempty"`
+	RiskLevel     string     `json:"risk_level,omitempty"`
+	SourceKey     string     `json:"source_key"`
+	Status        string     `json:"status"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	ResolvedAt    *time.Time `json:"resolved_at,omitempty"`
 }
 
 type Memory struct {

@@ -4,6 +4,7 @@ import type {
   AgentEvidence,
   AgentStep,
   AgentToolCall,
+  ApprovalGate,
   PipelineRunAgent,
   ChangeBatch,
   ContextPack,
@@ -17,6 +18,7 @@ import type {
   Project,
   ProjectAgentBundle,
   RequirementSessionBundle,
+  ResidualItem,
   RunEvent,
   Task,
 } from '../types';
@@ -195,6 +197,12 @@ export const apiClient = {
     unwrapItems<AgentEvidence>(api.get(`/api/pipeline/runs/${runId}/agent/evidence`)),
   listRunAgentEvaluations: async (runId: string) =>
     unwrapItems<AgentEvaluation>(api.get(`/api/pipeline/runs/${runId}/agent/evaluations`)),
+  listRunResidualItems: async (runId: string, limit = 100) =>
+    unwrapItems<ResidualItem>(api.get(`/api/pipeline/runs/${runId}/residual-items`, { params: { limit } })),
+  listRunApprovalGates: async (runId: string, limit = 100) =>
+    unwrapItems<ApprovalGate>(api.get(`/api/pipeline/runs/${runId}/approval-gates`, { params: { limit } })),
+  updateResidualItem: async (itemId: string, payload: { status: 'open' | 'resolved' | 'waived'; resolution_note?: string }) =>
+    (await api.patch<ResidualItem>(`/api/residual-items/${itemId}`, payload)).data,
   listRunEvents: async (runId: string) => unwrapItems<RunEvent>(api.get(`/api/pipeline/runs/${runId}/events`)),
   listRuns: async (projectId: string, limit = 20) =>
     unwrapItems<PipelineRun>(api.get(`/api/projects/${projectId}/pipeline-runs`, { params: { limit } })),

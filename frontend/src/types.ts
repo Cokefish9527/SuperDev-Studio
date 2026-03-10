@@ -151,7 +151,45 @@ export type AgentEvaluation = {
   verdict: string;
   reason: string;
   next_action: string;
+  missing_items: string[];
+  acceptance_delta: string;
   created_at: string;
+};
+
+export type ResidualItem = {
+  id: string;
+  project_id: string;
+  pipeline_run_id: string;
+  agent_run_id?: string;
+  stage: string;
+  category: string;
+  severity: string;
+  summary: string;
+  evidence: string;
+  suggested_command: string;
+  source_key: string;
+  status: 'open' | 'resolved' | 'waived' | string;
+  resolution_note?: string;
+  created_at: string;
+  updated_at: string;
+  resolved_at?: string;
+};
+
+export type ApprovalGate = {
+  id: string;
+  project_id: string;
+  pipeline_run_id: string;
+  change_batch_id?: string;
+  gate_type: string;
+  title: string;
+  detail: string;
+  tool_name?: string;
+  risk_level?: string;
+  source_key: string;
+  status: 'open' | 'resolved' | string;
+  created_at: string;
+  updated_at: string;
+  resolved_at?: string;
 };
 
 export type PipelineRunAgent = {

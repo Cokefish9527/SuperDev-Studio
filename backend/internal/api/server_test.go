@@ -174,12 +174,25 @@ func (r *scriptedAgentRuntime) Evaluate(ctx context.Context, req agentruntime.Ev
 		"fail":         "Stop the current execution.",
 		"pass":         "Continue to the next step.",
 	}[verdict]
+	missingItems := map[string][]string{
+		"need_context": {"补充上下文证据", "补充需求边界说明"},
+		"need_human":   {"等待人工确认高风险决策"},
+		"retry":        {"修复当前任务遗留问题"},
+	}[verdict]
+	acceptanceDelta := map[string]string{
+		"need_context": "当前验收证据不足，无法确认方案是否满足需求。",
+		"need_human":   "存在高风险决策，需人工确认后才能继续验收。",
+		"retry":        "当前输出尚未达到阶段验收标准。",
+		"pass":         "No blocking acceptance gap detected.",
+	}[verdict]
 	record, err := r.store.CreateAgentEvaluation(ctx, store.AgentEvaluation{
-		AgentStepID:    step.ID,
-		EvaluationType: "step-outcome",
-		Verdict:        verdict,
-		Reason:         reason,
-		NextAction:     nextAction,
+		AgentStepID:     step.ID,
+		EvaluationType:  "step-outcome",
+		Verdict:         verdict,
+		Reason:          reason,
+		NextAction:      nextAction,
+		MissingItems:    missingItems,
+		AcceptanceDelta: acceptanceDelta,
 	})
 	if err != nil {
 		return agentruntime.EvaluateResult{}, err
@@ -1525,6 +1538,80 @@ func TestStepByStepNeedContextPersistsEnrichmentTrace(t *testing.T) {
 	}
 }
 
+func TestRunResidualItemsReflectNeedContextEvaluation(t *testing.T) {
+	env := newAPITestEnv(t)
+	env.pipeline.SetAgentRuntime(newScriptedAgentRuntime(env.store, "need_context", "pass", "pass", "pass"))
+	repoRoot := t.TempDir()
+	project := createProjectViaAPIWithPayload(t, env.handler, map[string]any{
+		"name":        "ResidualNeedContextProject",
+		"description": "test project",
+		"repo_path":   repoRoot,
+	})
+
+	payload, _ := json.Marshal(map[string]any{
+		"project_id":   project.ID,
+		"prompt":       "Use additional context before finalizing the task",
+		"step_by_step": true,
+		"project_dir":  repoRoot,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/pipeline/runs", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	env.handler.ServeHTTP(res, req)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", res.Code)
+	}
+	var run store.PipelineRun
+	if err := json.Unmarshal(res.Body.Bytes(), &run); err != nil {
+		t.Fatalf("decode run: %v", err)
+	}
+	completed := waitForRunCompletion(t, env.store, run.ID)
+	if completed.Status != "completed" {
+		t.Fatalf("expected completed run, got %q", completed.Status)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/pipeline/runs/"+run.ID+"/residual-items", nil)
+	listRes := httptest.NewRecorder()
+	env.handler.ServeHTTP(listRes, listReq)
+	if listRes.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", listRes.Code, listRes.Body.String())
+	}
+	var response struct {
+		Items []store.ResidualItem `json:"items"`
+	}
+	if err := json.Unmarshal(listRes.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode residual response: %v", err)
+	}
+	if len(response.Items) == 0 {
+		t.Fatalf("expected residual items, got none")
+	}
+	matched := false
+	missingItemMatched := false
+	for _, item := range response.Items {
+		if strings.Contains(item.SourceKey, ":need_context") {
+			matched = true
+			if item.Status != "open" {
+				t.Fatalf("expected open residual status, got %q", item.Status)
+			}
+			if item.Category != "requirement" {
+				t.Fatalf("expected requirement category, got %q", item.Category)
+			}
+			if item.SuggestedCommand == "" {
+				t.Fatalf("expected suggested command for residual item")
+			}
+		}
+		if strings.Contains(item.SourceKey, ":missing:") && item.Summary == "补充上下文证据" {
+			missingItemMatched = true
+		}
+	}
+	if !matched {
+		t.Fatalf("expected need_context residual item, got %#v", response.Items)
+	}
+	if !missingItemMatched {
+		t.Fatalf("expected missing-item residual to be generated, got %#v", response.Items)
+	}
+}
+
 func TestFullCycleHighRiskDeployRequiresApprovalAndCanContinue(t *testing.T) {
 	env := newAPITestEnv(t)
 	env.pipeline.SetAgentRuntime(newScriptedAgentRuntime(env.store))
@@ -1592,6 +1679,70 @@ func TestFullCycleHighRiskDeployRequiresApprovalAndCanContinue(t *testing.T) {
 	completed := waitForRunCompletion(t, env.store, run.ID)
 	if completed.Status != "completed" {
 		t.Fatalf("expected completed run, got %q", completed.Status)
+	}
+}
+
+func TestRunApprovalGatesReflectAwaitingApprovalToolCall(t *testing.T) {
+	env := newAPITestEnv(t)
+	env.pipeline.SetAgentRuntime(newScriptedAgentRuntime(env.store))
+	repoRoot := t.TempDir()
+	project := createProjectViaAPIWithPayload(t, env.handler, map[string]any{
+		"name":        "ApprovalGateProject",
+		"description": "test project",
+		"repo_path":   repoRoot,
+	})
+
+	payload, _ := json.Marshal(map[string]any{
+		"project_id":  project.ID,
+		"prompt":      "Run full cycle and wait before deploy",
+		"full_cycle":  true,
+		"project_dir": repoRoot,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/pipeline/runs", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	env.handler.ServeHTTP(res, req)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", res.Code)
+	}
+	var run store.PipelineRun
+	if err := json.Unmarshal(res.Body.Bytes(), &run); err != nil {
+		t.Fatalf("decode run: %v", err)
+	}
+	blocked := waitForRunCompletion(t, env.store, run.ID)
+	if blocked.Status != "awaiting_human" {
+		t.Fatalf("expected awaiting_human, got %q", blocked.Status)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/pipeline/runs/"+run.ID+"/approval-gates", nil)
+	listRes := httptest.NewRecorder()
+	env.handler.ServeHTTP(listRes, listReq)
+	if listRes.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", listRes.Code, listRes.Body.String())
+	}
+	var response struct {
+		Items []store.ApprovalGate `json:"items"`
+	}
+	if err := json.Unmarshal(listRes.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode approval gate response: %v", err)
+	}
+	if len(response.Items) == 0 {
+		t.Fatalf("expected approval gates, got none")
+	}
+	matched := false
+	for _, item := range response.Items {
+		if item.ToolName == "run_superdev_deploy" {
+			matched = true
+			if item.Status != "open" {
+				t.Fatalf("expected open approval gate, got %q", item.Status)
+			}
+			if item.RiskLevel == "" {
+				t.Fatalf("expected risk level on approval gate")
+			}
+		}
+	}
+	if !matched {
+		t.Fatalf("expected deploy approval gate, got %#v", response.Items)
 	}
 }
 
@@ -1681,6 +1832,77 @@ func TestStepByStepNeedHumanCanResume(t *testing.T) {
 	}
 	if !foundResume {
 		t.Fatalf("expected resume event referencing previous run %s; events=%v", run.ID, events)
+	}
+}
+
+func TestUpdateResidualItemEndpointMarksResolved(t *testing.T) {
+	env := newAPITestEnv(t)
+	env.pipeline.SetAgentRuntime(newScriptedAgentRuntime(env.store, "need_context", "pass", "pass", "pass"))
+	repoRoot := t.TempDir()
+	project := createProjectViaAPIWithPayload(t, env.handler, map[string]any{
+		"name":        "ResidualResolutionProject",
+		"description": "test project",
+		"repo_path":   repoRoot,
+	})
+
+	payload, _ := json.Marshal(map[string]any{
+		"project_id":   project.ID,
+		"prompt":       "Use additional context before finalizing the task",
+		"step_by_step": true,
+		"project_dir":  repoRoot,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/pipeline/runs", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	env.handler.ServeHTTP(res, req)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", res.Code)
+	}
+	var run store.PipelineRun
+	if err := json.Unmarshal(res.Body.Bytes(), &run); err != nil {
+		t.Fatalf("decode run: %v", err)
+	}
+	_ = waitForRunCompletion(t, env.store, run.ID)
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/pipeline/runs/"+run.ID+"/residual-items", nil)
+	listRes := httptest.NewRecorder()
+	env.handler.ServeHTTP(listRes, listReq)
+	if listRes.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", listRes.Code, listRes.Body.String())
+	}
+	var listResponse struct {
+		Items []store.ResidualItem `json:"items"`
+	}
+	if err := json.Unmarshal(listRes.Body.Bytes(), &listResponse); err != nil {
+		t.Fatalf("decode residual response: %v", err)
+	}
+	if len(listResponse.Items) == 0 {
+		t.Fatalf("expected residual items, got none")
+	}
+	itemID := listResponse.Items[0].ID
+	updatePayload, _ := json.Marshal(map[string]any{
+		"status":          "resolved",
+		"resolution_note": "Handled by reviewer",
+	})
+	updateReq := httptest.NewRequest(http.MethodPatch, "/api/residual-items/"+itemID, bytes.NewReader(updatePayload))
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateRes := httptest.NewRecorder()
+	env.handler.ServeHTTP(updateRes, updateReq)
+	if updateRes.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", updateRes.Code, updateRes.Body.String())
+	}
+	var updated store.ResidualItem
+	if err := json.Unmarshal(updateRes.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("decode updated residual item: %v", err)
+	}
+	if updated.Status != "resolved" {
+		t.Fatalf("expected resolved status, got %q", updated.Status)
+	}
+	if updated.ResolutionNote != "Handled by reviewer" {
+		t.Fatalf("expected resolution note to be persisted, got %q", updated.ResolutionNote)
+	}
+	if updated.ResolvedAt == nil {
+		t.Fatalf("expected resolved_at to be populated")
 	}
 }
 

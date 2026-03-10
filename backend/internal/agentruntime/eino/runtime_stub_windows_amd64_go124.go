@@ -32,9 +32,11 @@ type planPayload struct {
 }
 
 type evaluationPayload struct {
-	Verdict    string `json:"verdict"`
-	Reason     string `json:"reason"`
-	NextAction string `json:"next_action"`
+	Verdict         string   `json:"verdict"`
+	Reason          string   `json:"reason"`
+	NextAction      string   `json:"next_action"`
+	MissingItems    []string `json:"missing_items"`
+	AcceptanceDelta string   `json:"acceptance_delta"`
 }
 
 func New(_ context.Context, s *store.Store, retrievalService *retrieval.Service, _ Config) (*Runtime, error) {
@@ -143,20 +145,24 @@ func (r *Runtime) Evaluate(ctx context.Context, req agentruntime.EvaluateRequest
 
 	evaluation := fallbackEvaluation(req)
 	record, err := r.store.CreateAgentEvaluation(ctx, store.AgentEvaluation{
-		AgentStepID:    step.ID,
-		EvaluationType: "step-outcome",
-		Verdict:        evaluation.Verdict,
-		Reason:         evaluation.Reason,
-		NextAction:     evaluation.NextAction,
+		AgentStepID:     step.ID,
+		EvaluationType:  "step-outcome",
+		Verdict:         evaluation.Verdict,
+		Reason:          evaluation.Reason,
+		NextAction:      evaluation.NextAction,
+		MissingItems:    evaluation.MissingItems,
+		AcceptanceDelta: evaluation.AcceptanceDelta,
 	})
 	if err != nil {
 		return agentruntime.EvaluateResult{}, err
 	}
 	outputJSON := mustJSON(map[string]any{
-		"verdict":     evaluation.Verdict,
-		"reason":      evaluation.Reason,
-		"next_action": evaluation.NextAction,
-		"raw":         evaluation.Reason,
+		"verdict":          evaluation.Verdict,
+		"reason":           evaluation.Reason,
+		"next_action":      evaluation.NextAction,
+		"missing_items":    evaluation.MissingItems,
+		"acceptance_delta": evaluation.AcceptanceDelta,
+		"raw":              evaluation.Reason,
 	})
 	finished := time.Now().UTC()
 	if err := r.store.UpdateAgentStep(ctx, step.ID, "completed", outputJSON, evaluation.Reason, &finished); err != nil {
@@ -206,11 +212,11 @@ func fallbackEvaluation(req agentruntime.EvaluateRequest) evaluationPayload {
 	summary := strings.ToLower(strings.TrimSpace(req.QualitySummary))
 	switch {
 	case strings.Contains(summary, "passed") || strings.Contains(summary, "通过"):
-		return evaluationPayload{Verdict: "pass", Reason: "Quality summary indicates the current step passed.", NextAction: "Advance to the next step."}
+		return evaluationPayload{Verdict: "pass", Reason: "Quality summary indicates the current step passed.", NextAction: "Advance to the next step.", AcceptanceDelta: "No blocking acceptance gap detected."}
 	case strings.Contains(summary, "missing") || strings.Contains(summary, "context"):
-		return evaluationPayload{Verdict: "need_context", Reason: "Current evidence appears insufficient for a safe decision.", NextAction: "Retrieve more context and retry planning."}
+		return evaluationPayload{Verdict: "need_context", Reason: "Current evidence appears insufficient for a safe decision.", NextAction: "Retrieve more context and retry planning.", MissingItems: []string{"补充上下文证据", "补充需求边界说明"}, AcceptanceDelta: "当前验收证据不足，无法确认方案是否满足需求。"}
 	default:
-		return evaluationPayload{Verdict: "retry", Reason: "Quality summary still shows unresolved issues.", NextAction: "Prepare a repair action and retry the task."}
+		return evaluationPayload{Verdict: "retry", Reason: "Quality summary still shows unresolved issues.", NextAction: "Prepare a repair action and retry the task.", MissingItems: []string{"修复质量门禁暴露的问题"}, AcceptanceDelta: "尚未达到当前阶段的质量验收标准。"}
 	}
 }
 

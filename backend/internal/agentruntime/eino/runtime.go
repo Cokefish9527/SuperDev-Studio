@@ -169,20 +169,24 @@ func (r *Runtime) Evaluate(ctx context.Context, req agentruntime.EvaluateRequest
 		}
 	}
 	record, err := r.store.CreateAgentEvaluation(ctx, store.AgentEvaluation{
-		AgentStepID:    step.ID,
-		EvaluationType: "step-outcome",
-		Verdict:        evaluation.Verdict,
-		Reason:         evaluation.Reason,
-		NextAction:     evaluation.NextAction,
+		AgentStepID:     step.ID,
+		EvaluationType:  "step-outcome",
+		Verdict:         evaluation.Verdict,
+		Reason:          evaluation.Reason,
+		NextAction:      evaluation.NextAction,
+		MissingItems:    evaluation.MissingItems,
+		AcceptanceDelta: evaluation.AcceptanceDelta,
 	})
 	if err != nil {
 		return agentruntime.EvaluateResult{}, err
 	}
 	outputJSON := mustJSON(map[string]any{
-		"verdict":     evaluation.Verdict,
-		"reason":      evaluation.Reason,
-		"next_action": evaluation.NextAction,
-		"raw":         raw,
+		"verdict":          evaluation.Verdict,
+		"reason":           evaluation.Reason,
+		"next_action":      evaluation.NextAction,
+		"missing_items":    evaluation.MissingItems,
+		"acceptance_delta": evaluation.AcceptanceDelta,
+		"raw":              raw,
 	})
 	finished := time.Now().UTC()
 	if err := r.store.UpdateAgentStep(ctx, step.ID, "completed", outputJSON, evaluation.Reason, &finished); err != nil {
@@ -215,9 +219,11 @@ type planPayload struct {
 }
 
 type evaluationPayload struct {
-	Verdict    string `json:"verdict"`
-	Reason     string `json:"reason"`
-	NextAction string `json:"next_action"`
+	Verdict         string   `json:"verdict"`
+	Reason          string   `json:"reason"`
+	NextAction      string   `json:"next_action"`
+	MissingItems    []string `json:"missing_items"`
+	AcceptanceDelta string   `json:"acceptance_delta"`
 }
 
 func (r *Runtime) generate(ctx context.Context, prompt string) (string, error) {
@@ -255,7 +261,7 @@ func buildEvaluationPrompt(req agentruntime.EvaluateRequest) string {
 		fmt.Sprintf("任务：%s", strings.TrimSpace(req.TaskTitle)),
 		fmt.Sprintf("尝试次数：%d", req.Attempt),
 		fmt.Sprintf("质量摘要：%s", strings.TrimSpace(req.QualitySummary)),
-		"请仅输出 JSON 对象，字段：verdict(pass|retry|need_context|need_human|fail), reason, next_action。",
+		"请仅输出 JSON 对象，字段：verdict(pass|retry|need_context|need_human|fail), reason, next_action, missing_items(array), acceptance_delta。",
 	}, "\n")
 }
 
@@ -284,11 +290,11 @@ func fallbackEvaluation(req agentruntime.EvaluateRequest) evaluationPayload {
 	summary := strings.ToLower(strings.TrimSpace(req.QualitySummary))
 	switch {
 	case strings.Contains(summary, "passed") || strings.Contains(summary, "通过"):
-		return evaluationPayload{Verdict: "pass", Reason: "Quality summary indicates the current step passed.", NextAction: "Advance to the next step."}
+		return evaluationPayload{Verdict: "pass", Reason: "Quality summary indicates the current step passed.", NextAction: "Advance to the next step.", AcceptanceDelta: "No blocking acceptance gap detected."}
 	case strings.Contains(summary, "missing") || strings.Contains(summary, "context"):
-		return evaluationPayload{Verdict: "need_context", Reason: "Current evidence appears insufficient for a safe decision.", NextAction: "Retrieve more context and retry planning."}
+		return evaluationPayload{Verdict: "need_context", Reason: "Current evidence appears insufficient for a safe decision.", NextAction: "Retrieve more context and retry planning.", MissingItems: []string{"补充上下文证据", "补充需求边界说明"}, AcceptanceDelta: "当前验收证据不足，无法确认方案是否满足需求。"}
 	default:
-		return evaluationPayload{Verdict: "retry", Reason: "Quality summary still shows unresolved issues.", NextAction: "Prepare a repair action and retry the task."}
+		return evaluationPayload{Verdict: "retry", Reason: "Quality summary still shows unresolved issues.", NextAction: "Prepare a repair action and retry the task.", MissingItems: []string{"修复质量门禁暴露的问题"}, AcceptanceDelta: "尚未达到当前阶段的质量验收标准。"}
 	}
 }
 
@@ -333,6 +339,12 @@ func parseEvaluationAnswer(raw string, fallback evaluationPayload) evaluationPay
 	}
 	if strings.TrimSpace(parsed.NextAction) == "" {
 		parsed.NextAction = fallback.NextAction
+	}
+	if len(parsed.MissingItems) == 0 {
+		parsed.MissingItems = fallback.MissingItems
+	}
+	if strings.TrimSpace(parsed.AcceptanceDelta) == "" {
+		parsed.AcceptanceDelta = fallback.AcceptanceDelta
 	}
 	return parsed
 }

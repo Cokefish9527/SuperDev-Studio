@@ -245,11 +245,13 @@ func TestStore_AgentRuntimeFlow(t *testing.T) {
 	}
 
 	if _, err := s.CreateAgentEvaluation(ctx, AgentEvaluation{
-		AgentStepID:    step.ID,
-		EvaluationType: "step-outcome",
-		Verdict:        "pass",
-		Reason:         "evidence retrieved",
-		NextAction:     "plan_next_step",
+		AgentStepID:     step.ID,
+		EvaluationType:  "step-outcome",
+		Verdict:         "pass",
+		Reason:          "evidence retrieved",
+		NextAction:      "plan_next_step",
+		MissingItems:    []string{"补充验收截图"},
+		AcceptanceDelta: "Need one more acceptance screenshot before final sign-off.",
 	}); err != nil {
 		t.Fatalf("create agent evaluation: %v", err)
 	}
@@ -287,6 +289,12 @@ func TestStore_AgentRuntimeFlow(t *testing.T) {
 	}
 	if len(evals) != 1 {
 		t.Fatalf("expected 1 evaluation record, got %d", len(evals))
+	}
+	if len(evals[0].MissingItems) != 1 || evals[0].MissingItems[0] != "补充验收截图" {
+		t.Fatalf("expected missing items to persist, got %#v", evals[0].MissingItems)
+	}
+	if evals[0].AcceptanceDelta != "Need one more acceptance screenshot before final sign-off." {
+		t.Fatalf("expected acceptance delta to persist, got %q", evals[0].AcceptanceDelta)
 	}
 }
 
