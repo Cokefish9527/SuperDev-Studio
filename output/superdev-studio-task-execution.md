@@ -1,8 +1,8 @@
 # Spec 任务执行报告
 
-- Change: `final-acceptance-handoff-view`
-- 总任务: 5
-- 已完成: 5
+- Change: `simple-delivery-autonomy-timeline`
+- 总任务: 4
+- 已完成: 4
 - 未完成: 0
 
 ## 自动修复记录

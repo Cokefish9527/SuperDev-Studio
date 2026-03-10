@@ -612,3 +612,36 @@ Add a clearer final acceptance / pre-release handoff view so users can quickly j
 1. Make background auto-advance and backlog-shrink activity more visible in the simplified result timeline.
 2. Add a change-batch level delivery ledger so users can review prior autonomous attempts and handoff outcomes.
 3. Add SOP/demo capture material once the end-to-end user flow is stable enough for formal walkthrough documentation.
+
+
+---
+
+# Agent Confirmed Delivery Loop - Progress Update (2026-03-11, simple-delivery-autonomy-timeline)
+
+## Phase goal
+
+Expose autonomous delivery progress more clearly on the simplified delivery page so ordinary users can understand background movement without opening the full operator timeline.
+
+## What is now complete
+
+- Added a dedicated `AutonomyActivityCard` for the simple delivery flow.
+- The card filters the latest run events down to user-meaningful autonomous signals:
+  - auto advance
+  - backlog shrink
+  - quality refresh
+  - preview review
+  - delivery completion
+- Integrated the card into `SimpleDeliveryPage`, reusing the existing run events query instead of adding a new backend surface.
+- Added component and page tests for autonomy visibility, then verified the frontend build.
+- This phase passed the Super Dev quality gate (`87/100`).
+
+## What this unlocks
+
+- users can now see autonomous background progress on the same page where they confirm previews and inspect delivery outcomes
+- backlog reconciliation and quality refresh are no longer hidden inside the full pipeline trace
+- the simplified page is closer to the target product shape: input requirement -> confirm draft -> watch autonomous progress -> review final result
+
+## Remaining broader roadmap after this phase
+
+1. Add a change-batch level delivery ledger so users can review prior autonomous attempts and outcomes.
+2. Add SOP / demo capture material for the end-to-end flow once the product path is stable enough for a formal walkthrough.

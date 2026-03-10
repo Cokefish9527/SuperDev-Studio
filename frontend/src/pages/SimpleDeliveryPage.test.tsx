@@ -360,6 +360,32 @@ describe('SimpleDeliveryPage', () => {
         updated_at: '2026-03-10T00:00:00Z',
       },
     ]);
+    vi.mocked(apiClient.listRunEvents).mockResolvedValue([
+      {
+        id: 1,
+        run_id: 'run-preview',
+        stage: 'auto-advance',
+        status: 'log',
+        message: 'Auto advance executed review_preview and kept waiting for preview sign-off',
+        created_at: '2026-03-10T00:00:30Z',
+      },
+      {
+        id: 2,
+        run_id: 'run-preview',
+        stage: 'backlog-reconcile',
+        status: 'completed',
+        message: 'Residual backlog re-evaluated: closed 1 historical item.',
+        created_at: '2026-03-10T00:00:40Z',
+      },
+      {
+        id: 3,
+        run_id: 'run-preview',
+        stage: 'lifecycle-quality',
+        status: 'completed',
+        message: 'Quality gate passed on iteration 1',
+        created_at: '2026-03-10T00:00:50Z',
+      },
+    ]);
     vi.mocked(apiClient.updatePreviewSession).mockResolvedValue({
       id: 'preview-1',
       project_id: 'project-1',
@@ -398,6 +424,9 @@ describe('SimpleDeliveryPage', () => {
     });
 
     expect(await screen.findByTestId('simple-delivery-status-alert')).toHaveTextContent('请先完成预览验收');
+    expect(await screen.findByTestId('simple-delivery-autonomy-summary')).toHaveTextContent('Quality gate result updated');
+    expect(await screen.findByTestId('simple-delivery-autonomy-card')).toHaveTextContent('Residual backlog re-evaluated: closed 1 historical item.');
+    expect(screen.getByTestId('simple-delivery-autonomy-card')).toHaveTextContent('Quality gate passed on iteration 1');
 
     await userEvent.click(await screen.findByTestId('simple-delivery-preview-accept'));
 

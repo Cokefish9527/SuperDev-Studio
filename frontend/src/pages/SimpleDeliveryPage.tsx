@@ -19,6 +19,7 @@ import {
 import dayjs from 'dayjs';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import AutonomyActivityCard from '../components/pipeline/AutonomyActivityCard';
 import DeliveryHandoffCard from '../components/pipeline/DeliveryHandoffCard';
 import { apiClient } from '../api/client';
 import { useProjectState } from '../state/project-context';
@@ -766,6 +767,11 @@ export default function SimpleDeliveryPage() {
                   approvalGatesQuery.isLoading ||
                   residualItemsQuery.isLoading
                 }
+              />
+
+              <AutonomyActivityCard
+                events={eventsQuery.data ?? []}
+                loading={eventsQuery.isLoading}
               />
             </Space>
           )}
