@@ -101,6 +101,7 @@ func (s *Server) Router() http.Handler {
 	r.With(s.rateLimit(s.pipelinePolicy("runs:retry"))).Post("/api/pipeline/runs/{runID}/retry", s.handleRetryPipeline)
 	r.With(s.rateLimit(s.pipelinePolicy("runs:retry"))).Post("/api/pipeline/runs/{runID}/resume", s.handleResumePipeline)
 	r.With(s.rateLimit(s.pipelinePolicy("runs:retry"))).Post("/api/pipeline/runs/{runID}/approve-tool", s.handleApprovePipelineTool)
+	r.With(s.rateLimit(s.pipelinePolicy("runs:retry"))).Post("/api/pipeline/runs/{runID}/auto-advance", s.handleAutoAdvancePipeline)
 	r.Get("/api/pipeline/runs/{runID}", s.handleGetPipelineRun)
 	r.Get("/api/pipeline/runs/{runID}/agent", s.handleGetPipelineRunAgent)
 	r.Get("/api/pipeline/runs/{runID}/agent/steps", s.handleListPipelineRunAgentSteps)

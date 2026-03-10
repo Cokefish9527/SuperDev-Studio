@@ -151,9 +151,19 @@ export type AgentEvaluation = {
   verdict: string;
   reason: string;
   next_action: string;
+  next_command?: string;
   missing_items: string[];
   acceptance_delta: string;
   created_at: string;
+};
+
+export type PipelineAutoAdvanceResult = {
+  action: string;
+  reason: string;
+  executed: boolean;
+  blocking?: string;
+  next_command?: string;
+  run?: PipelineRun;
 };
 
 export type ResidualItem = {

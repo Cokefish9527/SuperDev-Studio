@@ -60,6 +60,7 @@ func (m *Manager) pauseFullCycleForToolApproval(
 		Verdict:        "need_human",
 		Reason:         reason,
 		NextAction:     nextAction,
+		NextCommand:    "await_human",
 	})
 	if m.agentRun != nil {
 		_, _ = m.agentRun.RecordToolCall(ctx, agentruntime.ToolCallRequest{

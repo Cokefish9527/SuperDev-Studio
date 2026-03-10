@@ -45,6 +45,7 @@ vi.mock('../api/client', async (importOriginal) => {
       retryPipeline: vi.fn(),
       resumePipeline: vi.fn(),
       approvePipelineTool: vi.fn(),
+      autoAdvancePipeline: vi.fn(),
     },
   };
 });
@@ -109,6 +110,11 @@ describe('PipelinePage', () => {
     vi.mocked(apiClient.listRunApprovalGates).mockResolvedValue([]);
     vi.mocked(apiClient.updateResidualItem).mockResolvedValue(undefined as never);
     vi.mocked(apiClient.updatePreviewSession).mockResolvedValue(undefined as never);
+    vi.mocked(apiClient.autoAdvancePipeline).mockResolvedValue({
+      action: 'complete_delivery',
+      reason: 'No further action required.',
+      executed: false,
+    });
     vi.mocked(apiClient.getRunCompletion).mockResolvedValue({
       run_id: 'run-1',
       status: 'queued',
@@ -378,6 +384,11 @@ describe('PipelinePage', () => {
       created_at: '2026-03-05T00:00:00Z',
       updated_at: '2026-03-05T00:00:00Z',
     });
+    vi.mocked(apiClient.autoAdvancePipeline).mockResolvedValue({
+      action: 'complete_delivery',
+      reason: 'No further action required.',
+      executed: false,
+    });
     vi.mocked(apiClient.getRunCompletion).mockResolvedValue({
       run_id: 'run-failed',
       status: 'failed',
@@ -554,6 +565,11 @@ describe('PipelinePage', () => {
       created_at: '2026-03-05T00:00:00Z',
       updated_at: '2026-03-05T00:00:00Z',
     });
+    vi.mocked(apiClient.autoAdvancePipeline).mockResolvedValue({
+      action: 'complete_delivery',
+      reason: 'No further action required.',
+      executed: false,
+    });
     vi.mocked(apiClient.getRunCompletion).mockResolvedValue({
       run_id: 'run-completed',
       status: 'completed',
@@ -626,6 +642,11 @@ describe('PipelinePage', () => {
         created_at: `2026-03-05T00:${String(index).padStart(2, '0')}:00Z`,
       })),
     );
+    vi.mocked(apiClient.autoAdvancePipeline).mockResolvedValue({
+      action: 'complete_delivery',
+      reason: 'No further action required.',
+      executed: false,
+    });
     vi.mocked(apiClient.getRunCompletion).mockResolvedValue({
       run_id: 'run-completed',
       status: 'completed',
@@ -686,6 +707,11 @@ describe('PipelinePage', () => {
       stage: 'done',
       created_at: '2026-03-05T00:00:00Z',
       updated_at: '2026-03-05T00:00:00Z',
+    });
+    vi.mocked(apiClient.autoAdvancePipeline).mockResolvedValue({
+      action: 'complete_delivery',
+      reason: 'No further action required.',
+      executed: false,
     });
     vi.mocked(apiClient.getRunCompletion).mockResolvedValue({
       run_id: 'run-completed',

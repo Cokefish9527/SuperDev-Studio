@@ -50,23 +50,25 @@ type PlanResult struct {
 }
 
 type EvaluateRequest struct {
-	AgentRunID      string
-	NodeName        string
-	Title           string
-	Goal            string
-	TaskTitle       string
-	Attempt         int
-	QualitySummary  string
-	DecisionContext map[string]any
+	AgentRunID          string
+	NodeName            string
+	Title               string
+	Goal                string
+	TaskTitle           string
+	Attempt             int
+	QualitySummary      string
+	DecisionContext     map[string]any
+	AllowedNextCommands []string
 }
 
 type EvaluateResult struct {
-	Step       store.AgentStep       `json:"step"`
-	Verdict    string                `json:"verdict"`
-	Reason     string                `json:"reason"`
-	NextAction string                `json:"next_action"`
-	Evaluation store.AgentEvaluation `json:"evaluation"`
-	Raw        string                `json:"raw,omitempty"`
+	Step        store.AgentStep       `json:"step"`
+	Verdict     string                `json:"verdict"`
+	Reason      string                `json:"reason"`
+	NextAction  string                `json:"next_action"`
+	NextCommand string                `json:"next_command"`
+	Evaluation  store.AgentEvaluation `json:"evaluation"`
+	Raw         string                `json:"raw,omitempty"`
 }
 
 type ToolCallRequest struct {

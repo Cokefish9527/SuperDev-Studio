@@ -266,7 +266,7 @@ func (s *Store) CreateAgentEvaluation(ctx context.Context, evaluation AgentEvalu
 	if err != nil {
 		return AgentEvaluation{}, err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO agent_evaluations(id, agent_step_id, evaluation_type, verdict, reason, next_action, missing_items_json, acceptance_delta, created_at) VALUES(?,?,?,?,?,?,?,?,?)`, evaluation.ID, evaluation.AgentStepID, evaluation.EvaluationType, evaluation.Verdict, evaluation.Reason, evaluation.NextAction, string(missingItemsJSON), evaluation.AcceptanceDelta, formatTime(evaluation.CreatedAt))
+	_, err = s.db.ExecContext(ctx, `INSERT INTO agent_evaluations(id, agent_step_id, evaluation_type, verdict, reason, next_action, next_command, missing_items_json, acceptance_delta, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, evaluation.ID, evaluation.AgentStepID, evaluation.EvaluationType, evaluation.Verdict, evaluation.Reason, evaluation.NextAction, strings.TrimSpace(evaluation.NextCommand), string(missingItemsJSON), evaluation.AcceptanceDelta, formatTime(evaluation.CreatedAt))
 	if err != nil {
 		return AgentEvaluation{}, err
 	}
@@ -275,7 +275,7 @@ func (s *Store) CreateAgentEvaluation(ctx context.Context, evaluation AgentEvalu
 }
 
 func (s *Store) ListAgentEvaluations(ctx context.Context, agentRunID string) ([]AgentEvaluation, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT e.id, e.agent_step_id, e.evaluation_type, e.verdict, e.reason, e.next_action, e.missing_items_json, e.acceptance_delta, e.created_at FROM agent_evaluations e JOIN agent_steps st ON st.id = e.agent_step_id WHERE st.agent_run_id=? ORDER BY e.created_at ASC`, agentRunID)
+	rows, err := s.db.QueryContext(ctx, `SELECT e.id, e.agent_step_id, e.evaluation_type, e.verdict, e.reason, e.next_action, e.next_command, e.missing_items_json, e.acceptance_delta, e.created_at FROM agent_evaluations e JOIN agent_steps st ON st.id = e.agent_step_id WHERE st.agent_run_id=? ORDER BY e.created_at ASC`, agentRunID)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +285,7 @@ func (s *Store) ListAgentEvaluations(ctx context.Context, agentRunID string) ([]
 		var item AgentEvaluation
 		var createdRaw string
 		var missingItemsRaw string
-		if err := rows.Scan(&item.ID, &item.AgentStepID, &item.EvaluationType, &item.Verdict, &item.Reason, &item.NextAction, &missingItemsRaw, &item.AcceptanceDelta, &createdRaw); err != nil {
+		if err := rows.Scan(&item.ID, &item.AgentStepID, &item.EvaluationType, &item.Verdict, &item.Reason, &item.NextAction, &item.NextCommand, &missingItemsRaw, &item.AcceptanceDelta, &createdRaw); err != nil {
 			return nil, err
 		}
 		if strings.TrimSpace(missingItemsRaw) != "" {

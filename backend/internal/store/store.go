@@ -63,6 +63,7 @@ var allowedSchemaMutations = map[string]map[string]string{
 	"agent_evaluations": {
 		"missing_items_json": "TEXT NOT NULL DEFAULT '[]'",
 		"acceptance_delta":   "TEXT NOT NULL DEFAULT ''",
+		"next_command":       "TEXT NOT NULL DEFAULT ''",
 	},
 	"requirement_sessions": {
 		"latest_summary":         "TEXT NOT NULL DEFAULT ''",
@@ -254,6 +255,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			verdict TEXT NOT NULL,
 			reason TEXT NOT NULL DEFAULT '',
 			next_action TEXT NOT NULL DEFAULT '',
+			next_command TEXT NOT NULL DEFAULT '',
 			missing_items_json TEXT NOT NULL DEFAULT '[]',
 			acceptance_delta TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
@@ -510,6 +512,7 @@ func (s *Store) ensureAgentEvaluationColumns(ctx context.Context) error {
 	}{
 		{name: "missing_items_json", definition: "TEXT NOT NULL DEFAULT '[]'"},
 		{name: "acceptance_delta", definition: "TEXT NOT NULL DEFAULT ''"},
+		{name: "next_command", definition: "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, column := range columns {
 		if err := s.ensureTableColumn(ctx, "agent_evaluations", column.name, column.definition); err != nil {

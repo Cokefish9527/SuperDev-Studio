@@ -37,6 +37,7 @@ import type {
   ApprovalGate,
   ChangeBatch,
   PipelineArtifact,
+  PipelineAutoAdvanceResult,
   PipelineCompletion,
   PipelineRunAgent,
   PipelineRun,
@@ -325,6 +326,38 @@ export default function PipelinePage() {
       void queryClient.invalidateQueries({ queryKey: ['run-agent-evaluations', run.id] });
     },
     onError: (error: Error) => message.error(error.message || '确认失败'),
+  });
+  const autoAdvanceMutation = useMutation({
+    mutationFn: apiClient.autoAdvancePipeline,
+    onSuccess: (result: PipelineAutoAdvanceResult) => {
+      if (result.executed && result.run) {
+        message.success('Auto advanced to the next delivery run.');
+        setManualSelectedRunId(result.run.id);
+        setSelectedArtifactPath('');
+        void queryClient.invalidateQueries({ queryKey: ['runs', activeProjectId] });
+        void queryClient.invalidateQueries({ queryKey: ['run', result.run.id] });
+        void queryClient.invalidateQueries({ queryKey: ['run-events', result.run.id] });
+        void queryClient.invalidateQueries({ queryKey: ['run-completion', result.run.id] });
+        void queryClient.invalidateQueries({ queryKey: ['run-agent', result.run.id] });
+        void queryClient.invalidateQueries({ queryKey: ['run-agent-tool-calls', result.run.id] });
+        void queryClient.invalidateQueries({ queryKey: ['run-agent-evaluations', result.run.id] });
+        void queryClient.invalidateQueries({ queryKey: ['run-residual-items', result.run.id] });
+        void queryClient.invalidateQueries({ queryKey: ['run-preview-sessions', result.run.id] });
+        void queryClient.invalidateQueries({ queryKey: ['run-approval-gates', result.run.id] });
+        return;
+      }
+      message.info(result.reason || 'No further automatic action is available.');
+      if (selectedRunId) {
+        void queryClient.invalidateQueries({ queryKey: ['run', selectedRunId] });
+        void queryClient.invalidateQueries({ queryKey: ['run-events', selectedRunId] });
+        void queryClient.invalidateQueries({ queryKey: ['run-agent', selectedRunId] });
+        void queryClient.invalidateQueries({ queryKey: ['run-agent-evaluations', selectedRunId] });
+        void queryClient.invalidateQueries({ queryKey: ['run-residual-items', selectedRunId] });
+        void queryClient.invalidateQueries({ queryKey: ['run-preview-sessions', selectedRunId] });
+        void queryClient.invalidateQueries({ queryKey: ['run-approval-gates', selectedRunId] });
+      }
+    },
+    onError: (error: Error) => message.error(error.message || 'Auto advance failed'),
   });
   const updateResidualItemMutation = useMutation({
     mutationFn: ({
@@ -772,11 +805,16 @@ export default function PipelinePage() {
                           : `${latestAgentEvaluation?.reason ?? '本次运行曾请求补强上下文。'}${latestAgentEvaluation?.next_action ? `；下一步：${latestAgentEvaluation.next_action}` : ''}`}
                       />
                     ) : null}
-                    {(selectedRun.status === 'failed' || selectedRun.status === 'awaiting_human') ? (
+                    {(selectedRun.status === 'failed' || selectedRun.status === 'awaiting_human' || selectedRun.status === 'completed') ? (
                       <Space wrap>
                         {selectedRun.status === 'failed' ? (
                           <Button danger onClick={() => retryMutation.mutate(selectedRun.id)} loading={retryMutation.isPending}>
                             {"重试失败运行"}
+                          </Button>
+                        ) : null}
+                        {(selectedRun.status === 'failed' || selectedRun.status === 'completed') ? (
+                          <Button onClick={() => autoAdvanceMutation.mutate(selectedRun.id)} loading={autoAdvanceMutation.isPending}>
+                            {"Auto advance"}
                           </Button>
                         ) : null}
                         {selectedRun.status === 'awaiting_human' ? (
@@ -1394,6 +1432,11 @@ function AgentObservabilityCard({
                 {item.next_action ? (
                   <Typography.Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 8 }}>
                     Next: {item.next_action}
+                  </Typography.Paragraph>
+                ) : null}
+                {item.next_command ? (
+                  <Typography.Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 8 }}>
+                    Dispatch: {item.next_command}
                   </Typography.Paragraph>
                 ) : null}
               </div>

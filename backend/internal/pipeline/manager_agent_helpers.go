@@ -90,14 +90,15 @@ func (m *Manager) evaluateStepAgent(ctx context.Context, session *stepAgentSessi
 		return nil
 	}
 	result, err := m.agentRun.Evaluate(ctx, agentruntime.EvaluateRequest{
-		AgentRunID:      session.Run.ID,
-		NodeName:        nodeName,
-		Title:           title,
-		Goal:            req.Prompt,
-		TaskTitle:       taskTitle,
-		Attempt:         attempt,
-		QualitySummary:  qualitySummary,
-		DecisionContext: decisionContext,
+		AgentRunID:          session.Run.ID,
+		NodeName:            nodeName,
+		Title:               title,
+		Goal:                req.Prompt,
+		TaskTitle:           taskTitle,
+		Attempt:             attempt,
+		QualitySummary:      qualitySummary,
+		DecisionContext:     decisionContext,
+		AllowedNextCommands: resolveAllowedNextCommands(session, nodeName, decisionContext),
 	})
 	if err != nil {
 		_, _ = m.store.AppendRunEvent(ctx, store.RunEvent{RunID: session.Run.PipelineRunID, Stage: "step-agent", Status: "failed", Message: fmt.Sprintf("Agent evaluate failed for %s: %v", nodeName, err)})
@@ -143,6 +144,10 @@ func resolveAllowedTools(bundle agentconfig.Bundle, agentName string) []string {
 		return bundle.Agents[0].AllowedTools
 	}
 	return []string{"search_context", "run_superdev_create", "run_superdev_spec_validate", "run_superdev_task_status", "run_superdev_task_run", "run_superdev_quality", "run_superdev_preview", "run_superdev_deploy", "read_artifact", "append_run_event"}
+}
+
+func resolveAllowedNextCommands(_ *stepAgentSession, _ string, _ map[string]any) []string {
+	return []string{"rerun_delivery", "await_human", "review_preview", "complete_delivery"}
 }
 
 func agentVerdictAllowsAdvance(verdict string) bool {

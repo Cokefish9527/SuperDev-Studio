@@ -155,6 +155,7 @@ type AgentEvaluation struct {
 	Verdict         string    `json:"verdict"`
 	Reason          string    `json:"reason"`
 	NextAction      string    `json:"next_action"`
+	NextCommand     string    `json:"next_command"`
 	MissingItems    []string  `json:"missing_items"`
 	AcceptanceDelta string    `json:"acceptance_delta"`
 	CreatedAt       time.Time `json:"created_at"`

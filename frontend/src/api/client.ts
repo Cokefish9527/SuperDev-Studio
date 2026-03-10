@@ -5,6 +5,7 @@ import type {
   AgentStep,
   AgentToolCall,
   ApprovalGate,
+  PipelineAutoAdvanceResult,
   PipelineRunAgent,
   ChangeBatch,
   ContextPack,
@@ -185,6 +186,8 @@ export const apiClient = {
     (await api.post<PipelineRun>(`/api/pipeline/runs/${runId}/resume`)).data,
   approvePipelineTool: async (runId: string, toolName?: string) =>
     (await api.post<PipelineRun>(`/api/pipeline/runs/${runId}/approve-tool`, toolName ? { tool_name: toolName } : {})).data,
+  autoAdvancePipeline: async (runId: string) =>
+    (await api.post<PipelineAutoAdvanceResult>(`/api/pipeline/runs/${runId}/auto-advance`)).data,
   getRunCompletion: async (runId: string) =>
     (await api.get<PipelineCompletion>(`/api/pipeline/runs/${runId}/completion`)).data,
   getRun: async (runId: string) => (await api.get<PipelineRun>(`/api/pipeline/runs/${runId}`)).data,

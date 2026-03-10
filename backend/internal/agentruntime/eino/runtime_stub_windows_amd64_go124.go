@@ -35,6 +35,7 @@ type evaluationPayload struct {
 	Verdict         string   `json:"verdict"`
 	Reason          string   `json:"reason"`
 	NextAction      string   `json:"next_action"`
+	NextCommand     string   `json:"next_command"`
 	MissingItems    []string `json:"missing_items"`
 	AcceptanceDelta string   `json:"acceptance_delta"`
 }
@@ -126,11 +127,12 @@ func (r *Runtime) Plan(ctx context.Context, req agentruntime.PlanRequest) (agent
 
 func (r *Runtime) Evaluate(ctx context.Context, req agentruntime.EvaluateRequest) (agentruntime.EvaluateResult, error) {
 	inputJSON := mustJSON(map[string]any{
-		"goal":             req.Goal,
-		"task_title":       req.TaskTitle,
-		"attempt":          req.Attempt,
-		"quality_summary":  req.QualitySummary,
-		"decision_context": req.DecisionContext,
+		"goal":                  req.Goal,
+		"task_title":            req.TaskTitle,
+		"attempt":               req.Attempt,
+		"quality_summary":       req.QualitySummary,
+		"decision_context":      req.DecisionContext,
+		"allowed_next_commands": req.AllowedNextCommands,
 	})
 	step, err := r.store.CreateAgentStep(ctx, store.AgentStep{
 		AgentRunID: req.AgentRunID,
@@ -150,6 +152,7 @@ func (r *Runtime) Evaluate(ctx context.Context, req agentruntime.EvaluateRequest
 		Verdict:         evaluation.Verdict,
 		Reason:          evaluation.Reason,
 		NextAction:      evaluation.NextAction,
+		NextCommand:     evaluation.NextCommand,
 		MissingItems:    evaluation.MissingItems,
 		AcceptanceDelta: evaluation.AcceptanceDelta,
 	})
@@ -160,6 +163,7 @@ func (r *Runtime) Evaluate(ctx context.Context, req agentruntime.EvaluateRequest
 		"verdict":          evaluation.Verdict,
 		"reason":           evaluation.Reason,
 		"next_action":      evaluation.NextAction,
+		"next_command":     evaluation.NextCommand,
 		"missing_items":    evaluation.MissingItems,
 		"acceptance_delta": evaluation.AcceptanceDelta,
 		"raw":              evaluation.Reason,
@@ -173,7 +177,7 @@ func (r *Runtime) Evaluate(ctx context.Context, req agentruntime.EvaluateRequest
 	step.DecisionSummary = evaluation.Reason
 	step.FinishedAt = &finished
 	_ = r.store.UpdateAgentRun(ctx, req.AgentRunID, "running", req.NodeName, evaluation.Reason, nil)
-	return agentruntime.EvaluateResult{Step: step, Verdict: evaluation.Verdict, Reason: evaluation.Reason, NextAction: evaluation.NextAction, Evaluation: record, Raw: evaluation.Reason}, nil
+	return agentruntime.EvaluateResult{Step: step, Verdict: evaluation.Verdict, Reason: evaluation.Reason, NextAction: evaluation.NextAction, NextCommand: evaluation.NextCommand, Evaluation: record, Raw: evaluation.Reason}, nil
 }
 
 func (r *Runtime) RecordToolCall(ctx context.Context, req agentruntime.ToolCallRequest) (store.AgentToolCall, error) {
@@ -210,14 +214,74 @@ func fallbackPlan(req agentruntime.PlanRequest, evidence []store.AgentEvidence) 
 
 func fallbackEvaluation(req agentruntime.EvaluateRequest) evaluationPayload {
 	summary := strings.ToLower(strings.TrimSpace(req.QualitySummary))
+	allowed := sanitizeAllowedNextCommands(req.AllowedNextCommands)
 	switch {
-	case strings.Contains(summary, "passed") || strings.Contains(summary, "通过"):
-		return evaluationPayload{Verdict: "pass", Reason: "Quality summary indicates the current step passed.", NextAction: "Advance to the next step.", AcceptanceDelta: "No blocking acceptance gap detected."}
+	case strings.Contains(summary, "passed") || strings.Contains(summary, "pass"):
+		return evaluationPayload{Verdict: "pass", Reason: "Quality summary indicates the current step passed.", NextAction: "Advance to the next step.", NextCommand: fallbackNextCommand("pass", allowed), AcceptanceDelta: "No blocking acceptance gap detected."}
 	case strings.Contains(summary, "missing") || strings.Contains(summary, "context"):
-		return evaluationPayload{Verdict: "need_context", Reason: "Current evidence appears insufficient for a safe decision.", NextAction: "Retrieve more context and retry planning.", MissingItems: []string{"补充上下文证据", "补充需求边界说明"}, AcceptanceDelta: "当前验收证据不足，无法确认方案是否满足需求。"}
+		return evaluationPayload{Verdict: "need_context", Reason: "Current evidence appears insufficient for a safe decision.", NextAction: "Retrieve more context and retry planning.", NextCommand: fallbackNextCommand("need_context", allowed), MissingItems: []string{"Add more context evidence", "Clarify requirement boundaries"}, AcceptanceDelta: "Acceptance evidence is insufficient for a safe decision."}
 	default:
-		return evaluationPayload{Verdict: "retry", Reason: "Quality summary still shows unresolved issues.", NextAction: "Prepare a repair action and retry the task.", MissingItems: []string{"修复质量门禁暴露的问题"}, AcceptanceDelta: "尚未达到当前阶段的质量验收标准。"}
+		return evaluationPayload{Verdict: "retry", Reason: "Quality summary still shows unresolved issues.", NextAction: "Prepare a repair action and retry the task.", NextCommand: fallbackNextCommand("retry", allowed), MissingItems: []string{"Fix the remaining quality issues"}, AcceptanceDelta: "The current output does not yet meet the acceptance bar."}
 	}
+}
+
+func sanitizeAllowedNextCommands(commands []string) []string {
+	if len(commands) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(commands))
+	result := make([]string, 0, len(commands))
+	for _, command := range commands {
+		normalized := strings.ToLower(strings.TrimSpace(command))
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		result = append(result, normalized)
+	}
+	return result
+}
+
+func fallbackNextCommand(verdict string, allowed []string) string {
+	switch strings.ToLower(strings.TrimSpace(verdict)) {
+	case "pass":
+		for _, candidate := range []string{"complete_delivery", "review_preview"} {
+			if containsString(allowed, candidate) {
+				return candidate
+			}
+		}
+	case "need_human":
+		if containsString(allowed, "await_human") {
+			return "await_human"
+		}
+	default:
+		if containsString(allowed, "rerun_delivery") {
+			return "rerun_delivery"
+		}
+	}
+	if len(allowed) > 0 {
+		return allowed[0]
+	}
+	switch strings.ToLower(strings.TrimSpace(verdict)) {
+	case "pass":
+		return "complete_delivery"
+	case "need_human":
+		return "await_human"
+	default:
+		return "rerun_delivery"
+	}
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if strings.EqualFold(strings.TrimSpace(item), strings.TrimSpace(target)) {
+			return true
+		}
+	}
+	return false
 }
 
 func mustJSON(value any) string {

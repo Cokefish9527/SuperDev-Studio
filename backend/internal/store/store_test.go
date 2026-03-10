@@ -296,6 +296,9 @@ func TestStore_AgentRuntimeFlow(t *testing.T) {
 	if evals[0].AcceptanceDelta != "Need one more acceptance screenshot before final sign-off." {
 		t.Fatalf("expected acceptance delta to persist, got %q", evals[0].AcceptanceDelta)
 	}
+	if evals[0].NextCommand != "complete_delivery" {
+		t.Fatalf("expected next command to persist, got %q", evals[0].NextCommand)
+	}
 }
 
 func TestStore_ProjectAgentDefaultsPersist(t *testing.T) {

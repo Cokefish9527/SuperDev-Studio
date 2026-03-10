@@ -174,6 +174,13 @@ func (r *scriptedAgentRuntime) Evaluate(ctx context.Context, req agentruntime.Ev
 		"fail":         "Stop the current execution.",
 		"pass":         "Continue to the next step.",
 	}[verdict]
+	nextCommand := map[string]string{
+		"need_context": "rerun_delivery",
+		"need_human":   "await_human",
+		"retry":        "rerun_delivery",
+		"fail":         "rerun_delivery",
+		"pass":         "complete_delivery",
+	}[verdict]
 	missingItems := map[string][]string{
 		"need_context": {"补充上下文证据", "补充需求边界说明"},
 		"need_human":   {"等待人工确认高风险决策"},
@@ -191,6 +198,7 @@ func (r *scriptedAgentRuntime) Evaluate(ctx context.Context, req agentruntime.Ev
 		Verdict:         verdict,
 		Reason:          reason,
 		NextAction:      nextAction,
+		NextCommand:     nextCommand,
 		MissingItems:    missingItems,
 		AcceptanceDelta: acceptanceDelta,
 	})
@@ -198,7 +206,7 @@ func (r *scriptedAgentRuntime) Evaluate(ctx context.Context, req agentruntime.Ev
 		return agentruntime.EvaluateResult{}, err
 	}
 	finished := time.Now().UTC()
-	outputJSON := fmt.Sprintf(`{"verdict":%q,"reason":%q,"next_action":%q}`, verdict, reason, nextAction)
+	outputJSON := fmt.Sprintf(`{"verdict":%q,"reason":%q,"next_action":%q,"next_command":%q}`, verdict, reason, nextAction, nextCommand)
 	if err := r.store.UpdateAgentStep(ctx, step.ID, "completed", outputJSON, reason, &finished); err != nil {
 		return agentruntime.EvaluateResult{}, err
 	}
@@ -207,7 +215,7 @@ func (r *scriptedAgentRuntime) Evaluate(ctx context.Context, req agentruntime.Ev
 	step.DecisionSummary = reason
 	step.FinishedAt = &finished
 	_ = r.store.UpdateAgentRun(ctx, req.AgentRunID, "running", req.NodeName, reason, nil)
-	return agentruntime.EvaluateResult{Step: step, Verdict: verdict, Reason: reason, NextAction: nextAction, Evaluation: record, Raw: outputJSON}, nil
+	return agentruntime.EvaluateResult{Step: step, Verdict: verdict, Reason: reason, NextAction: nextAction, NextCommand: nextCommand, Evaluation: record, Raw: outputJSON}, nil
 }
 
 func (r *scriptedAgentRuntime) RecordToolCall(ctx context.Context, req agentruntime.ToolCallRequest) (store.AgentToolCall, error) {
@@ -1918,6 +1926,9 @@ func TestStepByStepNeedHumanCanResume(t *testing.T) {
 	if agentResponse.LatestEvaluation == nil || agentResponse.LatestEvaluation.Verdict != "need_human" {
 		t.Fatalf("expected latest need_human evaluation, got %#v", agentResponse.LatestEvaluation)
 	}
+	if agentResponse.LatestEvaluation.NextCommand != "await_human" {
+		t.Fatalf("expected latest next_command await_human, got %#v", agentResponse.LatestEvaluation)
+	}
 
 	resumeReq := httptest.NewRequest(http.MethodPost, "/api/pipeline/runs/"+run.ID+"/resume", nil)
 	resumeRes := httptest.NewRecorder()
@@ -2173,5 +2184,313 @@ func TestCreateRequirementSessionUsesLLMDrafts(t *testing.T) {
 	}
 	if !foundSummary {
 		t.Fatalf("expected summary doc version to use LLM draft")
+	}
+}
+
+func TestAutoAdvanceFailedRunStartsRetry(t *testing.T) {
+	ctx := context.Background()
+	env := newAPITestEnv(t)
+	repoRoot := t.TempDir()
+	project := createProjectViaAPIWithPayload(t, env.handler, map[string]any{
+		"name":        "AutoAdvanceRetryProject",
+		"description": "test project",
+		"repo_path":   repoRoot,
+	})
+	run, err := env.store.CreatePipelineRun(ctx, store.PipelineRun{
+		ProjectID:          project.ID,
+		Prompt:             "retry failed delivery",
+		LLMEnhancedLoop:    true,
+		Simulate:           true,
+		ProjectDir:         repoRoot,
+		Platform:           "web",
+		Frontend:           "react",
+		Backend:            "go",
+		Domain:             "saas",
+		ContextMode:        "auto",
+		ContextTokenBudget: 1200,
+		ContextMaxItems:    8,
+		ContextDynamic:     true,
+		MemoryWriteback:    true,
+		StepByStep:         true,
+		IterationLimit:     3,
+		Status:             "failed",
+		Progress:           100,
+		Stage:              "quality",
+	})
+	if err != nil {
+		t.Fatalf("create pipeline run: %v", err)
+	}
+	agentRun, err := env.store.CreateAgentRun(ctx, store.AgentRun{
+		PipelineRunID: run.ID,
+		ProjectID:     project.ID,
+		AgentName:     "reviewer",
+		ModeName:      "step_by_step",
+		Status:        "failed",
+		CurrentNode:   "quality",
+	})
+	if err != nil {
+		t.Fatalf("create agent run: %v", err)
+	}
+	step, err := env.store.CreateAgentStep(ctx, store.AgentStep{
+		AgentRunID: agentRun.ID,
+		NodeName:   "agent-evaluate-task-attempt",
+		Title:      "Evaluate retry",
+		InputJSON:  "{}",
+		Status:     "completed",
+	})
+	if err != nil {
+		t.Fatalf("create agent step: %v", err)
+	}
+	if _, err := env.store.CreateAgentEvaluation(ctx, store.AgentEvaluation{
+		AgentStepID:    step.ID,
+		EvaluationType: "step-outcome",
+		Verdict:        "retry",
+		Reason:         "Run another repair attempt.",
+		NextAction:     "Run another repair attempt.",
+		NextCommand:    "rerun_delivery",
+	}); err != nil {
+		t.Fatalf("create agent evaluation: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/pipeline/runs/"+run.ID+"/auto-advance", nil)
+	res := httptest.NewRecorder()
+	env.handler.ServeHTTP(res, req)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d body=%s", res.Code, res.Body.String())
+	}
+	var response struct {
+		Action      string             `json:"action"`
+		Executed    bool               `json:"executed"`
+		NextCommand string             `json:"next_command"`
+		Run         *store.PipelineRun `json:"run"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode auto advance response: %v", err)
+	}
+	if !response.Executed {
+		t.Fatalf("expected auto advance to execute, got %#v", response)
+	}
+	if response.Action != "rerun_delivery" || response.NextCommand != "rerun_delivery" {
+		t.Fatalf("expected rerun_delivery action, got %#v", response)
+	}
+	if response.Run == nil {
+		t.Fatalf("expected new run in response")
+	}
+	if response.Run.RetryOf != run.ID {
+		t.Fatalf("expected retry_of=%s, got %#v", run.ID, response.Run)
+	}
+	events, err := env.store.ListRunEvents(ctx, response.Run.ID)
+	if err != nil {
+		t.Fatalf("list run events: %v", err)
+	}
+	foundAutoAdvance := false
+	for _, item := range events {
+		if item.Stage == "auto-advance" && strings.Contains(item.Message, run.ID) {
+			foundAutoAdvance = true
+			break
+		}
+	}
+	if !foundAutoAdvance {
+		t.Fatalf("expected auto-advance event referencing %s; events=%v", run.ID, events)
+	}
+}
+
+func TestAutoAdvanceBlocksOnGeneratedPreview(t *testing.T) {
+	ctx := context.Background()
+	env := newAPITestEnv(t)
+	repoRoot := t.TempDir()
+	project := createProjectViaAPIWithPayload(t, env.handler, map[string]any{
+		"name":        "AutoAdvancePreviewProject",
+		"description": "test project",
+		"repo_path":   repoRoot,
+	})
+	run, err := env.store.CreatePipelineRun(ctx, store.PipelineRun{
+		ProjectID:          project.ID,
+		Prompt:             "completed delivery with preview pending",
+		LLMEnhancedLoop:    true,
+		Simulate:           true,
+		ProjectDir:         repoRoot,
+		Platform:           "web",
+		Frontend:           "react",
+		Backend:            "go",
+		Domain:             "saas",
+		ContextMode:        "auto",
+		ContextTokenBudget: 1200,
+		ContextMaxItems:    8,
+		ContextDynamic:     true,
+		MemoryWriteback:    true,
+		StepByStep:         true,
+		IterationLimit:     3,
+		Status:             "completed",
+		Progress:           100,
+		Stage:              "done",
+	})
+	if err != nil {
+		t.Fatalf("create pipeline run: %v", err)
+	}
+	if _, err := env.store.UpsertPreviewSession(ctx, store.PreviewSession{
+		ProjectID:     project.ID,
+		PipelineRunID: run.ID,
+		PreviewURL:    "http://127.0.0.1:4173/preview",
+		PreviewType:   "html",
+		Title:         "Pending preview",
+		SourceKey:     "manual:preview",
+		Status:        "generated",
+	}); err != nil {
+		t.Fatalf("create preview session: %v", err)
+	}
+	agentRun, err := env.store.CreateAgentRun(ctx, store.AgentRun{
+		PipelineRunID: run.ID,
+		ProjectID:     project.ID,
+		AgentName:     "reviewer",
+		ModeName:      "step_by_step",
+		Status:        "completed",
+		CurrentNode:   "done",
+	})
+	if err != nil {
+		t.Fatalf("create agent run: %v", err)
+	}
+	step, err := env.store.CreateAgentStep(ctx, store.AgentStep{
+		AgentRunID: agentRun.ID,
+		NodeName:   "agent-evaluate-task-attempt",
+		Title:      "Evaluate completion",
+		InputJSON:  "{}",
+		Status:     "completed",
+	})
+	if err != nil {
+		t.Fatalf("create agent step: %v", err)
+	}
+	if _, err := env.store.CreateAgentEvaluation(ctx, store.AgentEvaluation{
+		AgentStepID:    step.ID,
+		EvaluationType: "step-outcome",
+		Verdict:        "pass",
+		Reason:         "Preview is ready for review.",
+		NextAction:     "Review preview before final sign-off.",
+		NextCommand:    "review_preview",
+	}); err != nil {
+		t.Fatalf("create agent evaluation: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/pipeline/runs/"+run.ID+"/auto-advance", nil)
+	res := httptest.NewRecorder()
+	env.handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", res.Code, res.Body.String())
+	}
+	var response struct {
+		Action      string `json:"action"`
+		Executed    bool   `json:"executed"`
+		Blocking    string `json:"blocking"`
+		NextCommand string `json:"next_command"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode auto advance response: %v", err)
+	}
+	if response.Executed {
+		t.Fatalf("expected preview review to block execution, got %#v", response)
+	}
+	if response.Blocking != "preview_review" || response.NextCommand != "review_preview" {
+		t.Fatalf("expected preview_review block, got %#v", response)
+	}
+}
+
+func TestAutoAdvanceBlocksOnOpenApprovalGate(t *testing.T) {
+	ctx := context.Background()
+	env := newAPITestEnv(t)
+	repoRoot := t.TempDir()
+	project := createProjectViaAPIWithPayload(t, env.handler, map[string]any{
+		"name":        "AutoAdvanceApprovalProject",
+		"description": "test project",
+		"repo_path":   repoRoot,
+	})
+	run, err := env.store.CreatePipelineRun(ctx, store.PipelineRun{
+		ProjectID:          project.ID,
+		Prompt:             "await approval",
+		LLMEnhancedLoop:    true,
+		Simulate:           true,
+		ProjectDir:         repoRoot,
+		Platform:           "web",
+		Frontend:           "react",
+		Backend:            "go",
+		Domain:             "saas",
+		ContextMode:        "auto",
+		ContextTokenBudget: 1200,
+		ContextMaxItems:    8,
+		ContextDynamic:     true,
+		MemoryWriteback:    true,
+		FullCycle:          true,
+		IterationLimit:     3,
+		Status:             "awaiting_human",
+		Progress:           88,
+		Stage:              "lifecycle-release-approval",
+	})
+	if err != nil {
+		t.Fatalf("create pipeline run: %v", err)
+	}
+	if _, err := env.store.UpsertApprovalGate(ctx, store.ApprovalGate{
+		ProjectID:     project.ID,
+		PipelineRunID: run.ID,
+		GateType:      "tool_governance",
+		Title:         "High-risk deploy approval",
+		Detail:        "Human approval required before deploy.",
+		ToolName:      "run_superdev_deploy",
+		RiskLevel:     "high",
+		SourceKey:     "manual:approval",
+		Status:        "open",
+	}); err != nil {
+		t.Fatalf("create approval gate: %v", err)
+	}
+	agentRun, err := env.store.CreateAgentRun(ctx, store.AgentRun{
+		PipelineRunID: run.ID,
+		ProjectID:     project.ID,
+		AgentName:     "reviewer",
+		ModeName:      "full_cycle",
+		Status:        "awaiting_human",
+		CurrentNode:   "lifecycle-release-approval",
+	})
+	if err != nil {
+		t.Fatalf("create agent run: %v", err)
+	}
+	step, err := env.store.CreateAgentStep(ctx, store.AgentStep{
+		AgentRunID: agentRun.ID,
+		NodeName:   "tool-governance",
+		Title:      "Await approval",
+		InputJSON:  "{}",
+		Status:     "completed",
+	})
+	if err != nil {
+		t.Fatalf("create agent step: %v", err)
+	}
+	if _, err := env.store.CreateAgentEvaluation(ctx, store.AgentEvaluation{
+		AgentStepID:    step.ID,
+		EvaluationType: "tool_governance",
+		Verdict:        "need_human",
+		Reason:         "Human approval required before continuing.",
+		NextAction:     "Review the risky action before continuing.",
+		NextCommand:    "await_human",
+	}); err != nil {
+		t.Fatalf("create agent evaluation: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/pipeline/runs/"+run.ID+"/auto-advance", nil)
+	res := httptest.NewRecorder()
+	env.handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", res.Code, res.Body.String())
+	}
+	var response struct {
+		Action      string `json:"action"`
+		Executed    bool   `json:"executed"`
+		Blocking    string `json:"blocking"`
+		NextCommand string `json:"next_command"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode auto advance response: %v", err)
+	}
+	if response.Executed {
+		t.Fatalf("expected approval gate to block execution, got %#v", response)
+	}
+	if response.Blocking != "approval_gate" || response.NextCommand != "await_human" {
+		t.Fatalf("expected approval_gate block, got %#v", response)
 	}
 }

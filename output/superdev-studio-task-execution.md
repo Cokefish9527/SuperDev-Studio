@@ -1,8 +1,8 @@
 # Spec 任务执行报告
 
-- Change: `preview-acceptance-loop`
-- 总任务: 10
-- 已完成: 10
+- Change: `auto-dispatch-loop`
+- 总任务: 12
+- 已完成: 12
 - 未完成: 0
 
 ## 自动修复记录

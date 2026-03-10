@@ -216,7 +216,7 @@ func deriveResidualItems(run store.PipelineRun, agentRun *store.AgentRun, evalua
 				Severity:         mapResidualSeverity(verdict, run.Stage),
 				Summary:          mapResidualSummary(verdict),
 				Evidence:         residualEvidence(latestEvaluation),
-				SuggestedCommand: residualSuggestedCommand(run.ID, verdict),
+				SuggestedCommand: residualSuggestedCommand(run.ID, verdict, latestEvaluation),
 				SourceKey:        syncResidualPrefix + run.ID + ":" + verdict,
 				Status:           "open",
 			})
@@ -235,7 +235,7 @@ func deriveResidualItems(run store.PipelineRun, agentRun *store.AgentRun, evalua
 				Severity:         mapResidualSeverity(verdict, run.Stage),
 				Summary:          trimmed,
 				Evidence:         residualEvidence(latestEvaluation),
-				SuggestedCommand: residualSuggestedCommand(run.ID, verdict),
+				SuggestedCommand: residualSuggestedCommand(run.ID, verdict, latestEvaluation),
 				SourceKey:        fmt.Sprintf("%s%s:missing:%d", syncResidualPrefix, run.ID, index),
 				Status:           "open",
 			})
@@ -251,7 +251,7 @@ func deriveResidualItems(run store.PipelineRun, agentRun *store.AgentRun, evalua
 			Severity:         mapResidualSeverity("failed", run.Stage),
 			Summary:          fmt.Sprintf("运行失败：%s", firstNonEmpty(run.Stage, "unknown-stage")),
 			Evidence:         latestRunMessage(events, "Pipeline run failed without detailed event message."),
-			SuggestedCommand: fmt.Sprintf("POST /api/pipeline/runs/%s/retry", run.ID),
+			SuggestedCommand: fmt.Sprintf("POST /api/pipeline/runs/%s/auto-advance", run.ID),
 			SourceKey:        syncResidualPrefix + run.ID + ":failed",
 			Status:           "open",
 		})
@@ -391,14 +391,34 @@ func mapResidualSummary(kind string) string {
 	}
 }
 
-func residualSuggestedCommand(runID, kind string) string {
+func residualSuggestedCommand(runID, kind string, evaluation *store.AgentEvaluation) string {
+	if evaluation != nil {
+		if suggested := suggestedCommandForNextCommand(runID, evaluation.NextCommand); suggested != "" {
+			return suggested
+		}
+	}
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "need_human":
-		return fmt.Sprintf("POST /api/pipeline/runs/%s/resume 或审批高风险动作", runID)
+		return fmt.Sprintf("Human review required before POST /api/pipeline/runs/%s/auto-advance", runID)
 	case "need_context":
-		return fmt.Sprintf("补充上下文后 POST /api/pipeline/runs/%s/resume", runID)
+		return fmt.Sprintf("Add more context, then POST /api/pipeline/runs/%s/auto-advance", runID)
 	default:
-		return "继续执行标准修复流程"
+		return "Continue the standard repair workflow"
+	}
+}
+
+func suggestedCommandForNextCommand(runID, nextCommand string) string {
+	switch strings.ToLower(strings.TrimSpace(nextCommand)) {
+	case "rerun_delivery":
+		return fmt.Sprintf("POST /api/pipeline/runs/%s/auto-advance", runID)
+	case "await_human":
+		return fmt.Sprintf("Human review required before POST /api/pipeline/runs/%s/auto-advance", runID)
+	case "review_preview":
+		return fmt.Sprintf("Review preview first, then POST /api/pipeline/runs/%s/auto-advance", runID)
+	case "complete_delivery":
+		return fmt.Sprintf("GET /api/pipeline/runs/%s/completion", runID)
+	default:
+		return ""
 	}
 }
 
