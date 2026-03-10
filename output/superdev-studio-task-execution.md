@@ -1,6 +1,6 @@
 # Spec 任务执行报告
 
-- Change: `simple-delivery-final-handoff`
+- Change: `simple-delivery-result-cockpit`
 - 总任务: 4
 - 已完成: 4
 - 未完成: 0

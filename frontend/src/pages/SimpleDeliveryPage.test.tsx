@@ -586,21 +586,32 @@ describe('SimpleDeliveryPage', () => {
     });
 
     expect(await screen.findByTestId('simple-delivery-status-alert')).toHaveTextContent('请先完成预览验收');
-    expect(await screen.findByTestId('simple-delivery-autonomy-summary')).toHaveTextContent('Quality gate result updated');
-    expect(await screen.findByTestId('simple-delivery-autonomy-card')).toHaveTextContent('Residual backlog re-evaluated: closed 1 historical item.');
-    expect(screen.getByTestId('simple-delivery-autonomy-card')).toHaveTextContent('Quality gate passed on iteration 1');
+    expect(await screen.findByTestId('simple-delivery-view-overview')).toHaveTextContent(/总\s*览/);
+    expect(screen.getByTestId('simple-delivery-view-autonomy')).toHaveTextContent(/自治\s*过程/);
+    expect(screen.getByTestId('simple-delivery-view-history')).toHaveTextContent(/交付\s*历史/);
     expect(await screen.findByTestId('delivery-handoff-acceptance')).toHaveTextContent('The run is still preparing the final handoff package.');
     expect(screen.getByTestId('delivery-handoff-local-preview')).toHaveTextContent('python -m http.server 4173 --directory "D:/Work/output"');
     expect(await screen.findByTestId('delivery-process-preview-card')).toHaveTextContent('superdev-studio-quality-gate.md');
     expect(screen.getByTestId('delivery-process-preview-card')).toHaveTextContent('superdev-studio-task-execution.md');
+    expect(screen.queryByTestId('simple-delivery-autonomy-card')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('simple-delivery-ledger-card')).not.toBeInTheDocument();
+
     await waitFor(() => {
       expect(screen.getByText('Quality gate passed on iteration 1 report')).toBeInTheDocument();
     });
+
     await userEvent.click(screen.getByTestId('delivery-process-toggle-final-preview'));
     expect(screen.getByTitle('delivery-process-final-preview')).toHaveAttribute(
       'src',
       'http://localhost:8080/api/pipeline/runs/run-preview/preview',
     );
+
+    await userEvent.click(screen.getByTestId('simple-delivery-view-autonomy'));
+    expect(await screen.findByTestId('simple-delivery-autonomy-summary')).toHaveTextContent('Quality gate result updated');
+    expect(await screen.findByTestId('simple-delivery-autonomy-card')).toHaveTextContent('Residual backlog re-evaluated: closed 1 historical item.');
+    expect(screen.getByTestId('simple-delivery-autonomy-card')).toHaveTextContent('Quality gate passed on iteration 1');
+
+    await userEvent.click(screen.getByTestId('simple-delivery-view-history'));
     expect(await screen.findByTestId('simple-delivery-ledger-card')).toHaveTextContent('Attempt 1');
     expect(screen.getByTestId('simple-delivery-ledger-card')).toHaveTextContent('Attempt 2');
     expect(screen.getByTestId('simple-delivery-ledger-card')).toHaveTextContent('Initial timeline notebook run');
@@ -611,6 +622,9 @@ describe('SimpleDeliveryPage', () => {
     expect(screen.getByTestId('simple-delivery-ledger-card')).toHaveTextContent('Approvals 1');
     expect(screen.getByTestId('simple-delivery-ledger-card')).toHaveTextContent('Residuals 1');
     expect(screen.getByTestId('simple-delivery-ledger-card')).not.toHaveTextContent('Other batch run');
+
+    await userEvent.click(screen.getByTestId('simple-delivery-view-overview'));
+    expect(await screen.findByTestId('delivery-process-preview-card')).toBeInTheDocument();
 
     await userEvent.click(await screen.findByTestId('simple-delivery-preview-accept'));
 

@@ -112,6 +112,13 @@ const zh = {
   previewTagPrefix: '预览:',
   approvalTagPrefix: '审批',
   residualTagPrefix: '残留',
+  resultCockpitTitle: '结果驾驶舱',
+  resultCockpitOverview: '总览',
+  resultCockpitAutonomy: '自治过程',
+  resultCockpitHistory: '交付历史',
+  resultCockpitOverviewDesc: '集中查看过程预览、交付交接和当前验收动作。',
+  resultCockpitAutonomyDesc: '查看 Agent 如何评估结果、跟踪残留项并驱动下一步 super-dev 执行。',
+  resultCockpitHistoryDesc: '回看当前变更批次的交付尝试、关键信号和质量收敛轨迹。',
   howToUse: '如何使用',
   howTo1:
     '1) 输入一句需求，系统会先生成摘要、PRD、计划和风险说明。',
@@ -283,6 +290,7 @@ export default function SimpleDeliveryPage() {
   const [form] = Form.useForm<{ title?: string; raw_input: string }>();
   const [sessionBundle, setSessionBundle] = useState<RequirementSessionBundle | null>(null);
   const [activeRunIdOverride, setActiveRunIdOverride] = useState('');
+  const [resultView, setResultView] = useState<'overview' | 'autonomy' | 'history'>('overview');
   const [autoAdvanceState, setAutoAdvanceState] = useState<{ runId: string; result: PipelineAutoAdvanceResult } | null>(null);
   const attemptedAutoAdvanceRuns = useRef<Set<string>>(new Set());
   const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
@@ -530,6 +538,12 @@ export default function SimpleDeliveryPage() {
   );
   const deliveryLedgerLoading =
     changeBatchRunsQuery.isLoading || deliveryLedgerSignalQueries.some((query) => query.isLoading);
+  const resultViewOptions = [
+    { key: 'overview' as const, label: zh.resultCockpitOverview, description: zh.resultCockpitOverviewDesc },
+    { key: 'autonomy' as const, label: zh.resultCockpitAutonomy, description: zh.resultCockpitAutonomyDesc },
+    { key: 'history' as const, label: zh.resultCockpitHistory, description: zh.resultCockpitHistoryDesc },
+  ];
+  const activeResultView = resultViewOptions.find((item) => item.key === resultView) ?? resultViewOptions[0];
   const openApprovalGateCount = countOpenApprovalGates(approvalGates);
   const openResidualCount = countOpenResiduals(residualItems);
   const latestEvaluation = agentQuery.data?.latest_evaluation;
@@ -541,6 +555,13 @@ export default function SimpleDeliveryPage() {
     run?.status === 'awaiting_human' ||
     currentAutoAdvanceResult?.blocking === 'approval_gate' ||
     currentAutoAdvanceResult?.blocking === 'awaiting_human';
+
+  useEffect(() => {
+    if (!latestRunId) {
+      return;
+    }
+    setResultView('overview');
+  }, [latestRunId]);
 
   useEffect(() => {
     if (!run?.id) {
@@ -862,44 +883,82 @@ export default function SimpleDeliveryPage() {
                 {openResidualCount > 0 ? <Tag color="gold">{`${zh.residualTagPrefix} ${openResidualCount}`}</Tag> : null}
               </Space>
 
-              <DeliveryProcessPreviewCard
-                completion={completionQuery.data}
-                apiBase={apiBase}
-                loading={completionQuery.isLoading}
-              />
+              <div
+                style={{
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 18,
+                  padding: 16,
+                  background: 'linear-gradient(180deg, #f8fafc 0%, #ffffff 100%)',
+                }}
+              >
+                <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+                  <Space wrap align="center" style={{ justifyContent: 'space-between', width: '100%' }}>
+                    <Space wrap>
+                      <Typography.Text strong>{zh.resultCockpitTitle}</Typography.Text>
+                      {resultViewOptions.map((item) => (
+                        <Button
+                          key={item.key}
+                          size="small"
+                          type={resultView === item.key ? 'primary' : 'default'}
+                          data-testid={`simple-delivery-view-${item.key}`}
+                          onClick={() => setResultView(item.key)}
+                        >
+                          {item.label}
+                        </Button>
+                      ))}
+                    </Space>
+                    <Tag color="blue">{activeResultView.label}</Tag>
+                  </Space>
+                  <Typography.Text type="secondary">{activeResultView.description}</Typography.Text>
 
-              <DeliveryHandoffCard
-                run={run}
-                completion={completionQuery.data}
-                events={eventsQuery.data ?? []}
-                previewSessions={previewSessions}
-                approvalGates={approvalGates}
-                residualItems={residualItems}
-                apiBase={apiBase}
-                loading={
-                  completionQuery.isLoading ||
-                  eventsQuery.isLoading ||
-                  previewSessionsQuery.isLoading ||
-                  approvalGatesQuery.isLoading ||
-                  residualItemsQuery.isLoading
-                }
-              />
+                  {resultView === 'overview' ? (
+                    <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+                      <DeliveryProcessPreviewCard
+                        completion={completionQuery.data}
+                        apiBase={apiBase}
+                        loading={completionQuery.isLoading}
+                      />
 
-              <AutonomyActivityCard
-                events={eventsQuery.data ?? []}
-                loading={eventsQuery.isLoading}
-              />
+                      <DeliveryHandoffCard
+                        run={run}
+                        completion={completionQuery.data}
+                        events={eventsQuery.data ?? []}
+                        previewSessions={previewSessions}
+                        approvalGates={approvalGates}
+                        residualItems={residualItems}
+                        apiBase={apiBase}
+                        loading={
+                          completionQuery.isLoading ||
+                          eventsQuery.isLoading ||
+                          previewSessionsQuery.isLoading ||
+                          approvalGatesQuery.isLoading ||
+                          residualItemsQuery.isLoading
+                        }
+                      />
+                    </Space>
+                  ) : null}
 
-              <DeliveryLedgerCard
-                batchId={latestChangeBatchId}
-                batchTitle={sessionBundle?.change_batch?.title || latest?.title}
-                mode={sessionBundle?.change_batch?.mode || (run?.full_cycle ? 'full_cycle' : run?.step_by_step ? 'step_by_step' : '')}
-                runs={deliveryLedgerDisplayRuns}
-                totalAttempts={deliveryLedgerRuns.length}
-                currentRunId={latestRunId}
-                runSignals={deliveryLedgerSignals}
-                loading={deliveryLedgerLoading}
-              />
+                  {resultView === 'autonomy' ? (
+                    <AutonomyActivityCard
+                      events={eventsQuery.data ?? []}
+                      loading={eventsQuery.isLoading}
+                    />
+                  ) : null}
+
+                  {resultView === 'history' ? (
+                    <DeliveryLedgerCard
+                      batchId={latestChangeBatchId}
+                      batchTitle={sessionBundle?.change_batch?.title || latest?.title}
+                      mode={sessionBundle?.change_batch?.mode || (run?.full_cycle ? 'full_cycle' : run?.step_by_step ? 'step_by_step' : '')}
+                      runs={deliveryLedgerDisplayRuns}
+                      totalAttempts={deliveryLedgerRuns.length}
+                      currentRunId={latestRunId}
+                      runSignals={deliveryLedgerSignals}
+                      loading={deliveryLedgerLoading}
+                    />
+                  ) : null}
+                </Space>
+              </div>
             </Space>
           )}
         </Card>
