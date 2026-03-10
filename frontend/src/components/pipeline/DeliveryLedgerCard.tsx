@@ -3,6 +3,13 @@ import dayjs from 'dayjs';
 import type { PipelineRun } from '../../types';
 import { stageLabel } from './presentation';
 
+export type DeliveryLedgerRunSignal = {
+  preview: 'accepted' | 'rejected' | 'pending' | 'missing';
+  quality: 'passed' | 'failed' | 'pending';
+  openApprovals: number;
+  openResiduals: number;
+};
+
 type Props = {
   batchId?: string;
   batchTitle?: string;
@@ -10,19 +17,31 @@ type Props = {
   runs: PipelineRun[];
   currentRunId?: string;
   loading?: boolean;
+  totalAttempts?: number;
+  runSignals?: Record<string, DeliveryLedgerRunSignal>;
 };
 
 type LedgerRun = PipelineRun & {
   attemptNumber: number;
 };
 
-export default function DeliveryLedgerCard({ batchId, batchTitle, mode, runs, currentRunId, loading }: Props) {
+export default function DeliveryLedgerCard({
+  batchId,
+  batchTitle,
+  mode,
+  runs,
+  currentRunId,
+  loading,
+  totalAttempts,
+  runSignals,
+}: Props) {
   const orderedRuns = [...runs]
     .sort((left, right) => dayjs(left.created_at).valueOf() - dayjs(right.created_at).valueOf())
     .map((run, index) => ({ ...run, attemptNumber: index + 1 }));
 
   const latestRun = orderedRuns[orderedRuns.length - 1];
   const displayRuns = [...orderedRuns].reverse();
+  const attemptTotal = totalAttempts ?? orderedRuns.length;
   const completedCount = orderedRuns.filter((run) => run.status === 'completed').length;
   const failedCount = orderedRuns.filter((run) => run.status === 'failed').length;
   const activeCount = orderedRuns.filter((run) => run.status !== 'completed' && run.status !== 'failed').length;
@@ -37,47 +56,67 @@ export default function DeliveryLedgerCard({ batchId, batchTitle, mode, runs, cu
             data-testid="simple-delivery-ledger-summary"
             showIcon
             type={latestRun?.status === 'completed' ? 'success' : latestRun?.status === 'failed' ? 'warning' : 'info'}
-            title={summaryTitle(batchTitle, displayRuns.length)}
+            title={summaryTitle(batchTitle, attemptTotal)}
             description={summaryDescription({ batchId, mode, latestRun, completedCount, failedCount, activeCount })}
           />
 
           <Row gutter={[12, 12]}>
             <Col xs={24} md={8}>
-              <MetricTile label="Attempts" value={String(displayRuns.length)} note="Total autonomous delivery runs in this change batch" />
+              <MetricTile label="Attempts" value={String(attemptTotal)} note="Total autonomous delivery runs in this change batch" />
             </Col>
             <Col xs={24} md={8}>
-              <MetricTile label="Completed" value={String(completedCount)} note="Runs that reached a completed delivery state" />
+              <MetricTile label="Completed" value={String(completedCount)} note="Displayed runs that reached a completed delivery state" />
             </Col>
             <Col xs={24} md={8}>
-              <MetricTile label="Latest status" value={statusLabel(latestRun?.status)} note={latestRun ? `Latest run ${shortId(latestRun.id)} is the current batch head` : 'No runs recorded yet'} />
+              <MetricTile
+                label="Latest status"
+                value={statusLabel(latestRun?.status)}
+                note={latestRun ? `Latest run ${shortId(latestRun.id)} is the current batch head` : 'No runs recorded yet'}
+              />
             </Col>
           </Row>
 
-          <Typography.Text strong>Attempt history</Typography.Text>
+          <Space align="center" wrap>
+            <Typography.Text strong>Recent attempt history</Typography.Text>
+            {attemptTotal > displayRuns.length ? (
+              <Typography.Text type="secondary">Showing latest {displayRuns.length} of {attemptTotal} attempts</Typography.Text>
+            ) : null}
+          </Space>
           <div style={{ maxHeight: 360, overflowY: 'auto', paddingRight: 8 }}>
             <Timeline
-              items={displayRuns.map((run) => ({
-                color: runStatusColor(run.status),
-                content: (
-                  <Space orientation="vertical" size={4} style={{ width: '100%' }} data-testid={`delivery-ledger-run-${run.id}`}>
-                    <Space wrap>
-                      <Tag color="blue">Attempt {run.attemptNumber}</Tag>
-                      <Tag color={runStatusColor(run.status)}>{run.status}</Tag>
-                      <Tag>{stageLabel(run.stage)}</Tag>
-                      {run.id === currentRunId ? <Tag color="processing">current</Tag> : null}
-                      {run.id === latestRun?.id ? <Tag color="cyan">latest</Tag> : null}
-                      {run.retry_of ? <Tag color="purple">retry</Tag> : null}
+              items={displayRuns.map((run) => {
+                const signal = runSignals?.[run.id];
+                return {
+                  color: runStatusColor(run.status),
+                  content: (
+                    <Space orientation="vertical" size={4} style={{ width: '100%' }} data-testid={`delivery-ledger-run-${run.id}`}>
+                      <Space wrap>
+                        <Tag color="blue">Attempt {run.attemptNumber}</Tag>
+                        <Tag color={runStatusColor(run.status)}>{run.status}</Tag>
+                        <Tag>{stageLabel(run.stage)}</Tag>
+                        {run.id === currentRunId ? <Tag color="processing">current</Tag> : null}
+                        {run.id === latestRun?.id ? <Tag color="cyan">latest</Tag> : null}
+                        {run.retry_of ? <Tag color="purple">retry</Tag> : null}
+                      </Space>
+                      <Typography.Text>{run.prompt}</Typography.Text>
+                      {signal ? (
+                        <Space wrap>
+                          <Tag color={previewSignalColor(signal.preview)}>{previewSignalLabel(signal.preview)}</Tag>
+                          <Tag color={qualitySignalColor(signal.quality)}>{qualitySignalLabel(signal.quality)}</Tag>
+                          {signal.openApprovals > 0 ? <Tag color="gold">Approvals {signal.openApprovals}</Tag> : null}
+                          {signal.openResiduals > 0 ? <Tag color="volcano">Residuals {signal.openResiduals}</Tag> : null}
+                        </Space>
+                      ) : null}
+                      {run.retry_of ? (
+                        <Typography.Text type="secondary">Retried from {shortId(run.retry_of)}</Typography.Text>
+                      ) : null}
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        Created {dayjs(run.created_at).format('YYYY-MM-DD HH:mm:ss')} | Updated {dayjs(run.updated_at).format('YYYY-MM-DD HH:mm:ss')}
+                      </Typography.Text>
                     </Space>
-                    <Typography.Text>{run.prompt}</Typography.Text>
-                    {run.retry_of ? (
-                      <Typography.Text type="secondary">Retried from {shortId(run.retry_of)}</Typography.Text>
-                    ) : null}
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      Created {dayjs(run.created_at).format('YYYY-MM-DD HH:mm:ss')} | Updated {dayjs(run.updated_at).format('YYYY-MM-DD HH:mm:ss')}
-                    </Typography.Text>
-                  </Space>
-                ),
-              }))}
+                  ),
+                };
+              })}
             />
           </div>
         </Space>
@@ -178,6 +217,54 @@ function runStatusColor(status?: string) {
       return 'gold';
     case 'queued':
       return 'orange';
+    default:
+      return 'blue';
+  }
+}
+
+function previewSignalLabel(status: DeliveryLedgerRunSignal['preview']) {
+  switch (status) {
+    case 'accepted':
+      return 'Preview accepted';
+    case 'rejected':
+      return 'Preview rejected';
+    case 'pending':
+      return 'Preview waiting';
+    default:
+      return 'Preview missing';
+  }
+}
+
+function previewSignalColor(status: DeliveryLedgerRunSignal['preview']) {
+  switch (status) {
+    case 'accepted':
+      return 'green';
+    case 'rejected':
+      return 'red';
+    case 'pending':
+      return 'gold';
+    default:
+      return 'default';
+  }
+}
+
+function qualitySignalLabel(status: DeliveryLedgerRunSignal['quality']) {
+  switch (status) {
+    case 'passed':
+      return 'Quality passed';
+    case 'failed':
+      return 'Quality failed';
+    default:
+      return 'Quality pending';
+  }
+}
+
+function qualitySignalColor(status: DeliveryLedgerRunSignal['quality']) {
+  switch (status) {
+    case 'passed':
+      return 'green';
+    case 'failed':
+      return 'red';
     default:
       return 'blue';
   }

@@ -707,3 +707,118 @@ Expose multi-run delivery history for the active change batch on the simplified 
 1. Unify language across the simplified delivery result cards.
 2. Add richer per-run summary signals in the ledger, such as preview, quality, and residual status rollups.
 3. Add SOP / demo capture material for the end-to-end flow once the product path is stable enough for a formal walkthrough.
+
+# Agent Confirmed Delivery Loop - Execution Report (2026-03-11)
+
+## Goal
+
+Complete the simplified delivery ledger upgrade so users can understand the acceptance state of each recent autonomous run in the active change batch without opening the full pipeline page.
+
+## Delivered in this phase
+
+### 1. Richer delivery-ledger run signals
+
+- `frontend/src/components/pipeline/DeliveryLedgerCard.tsx` now shows per-run badges for:
+  - preview accepted / rejected / waiting / missing
+  - quality passed / failed / pending
+  - open approvals count
+  - open residuals count
+- The ledger now answers not only how many times the system retried, but also what each retry achieved or left unresolved.
+
+### 2. Signal derivation reused existing run APIs
+
+- `frontend/src/pages/SimpleDeliveryPage.tsx` now derives ledger signals by reusing existing run-level APIs:
+  - `listRunEvents(runId)`
+  - `listRunPreviewSessions(runId)`
+  - `listRunApprovalGates(runId)`
+  - `listRunResidualItems(runId)`
+- Detailed signal fetching is limited to the latest displayed ledger runs so the simplified page stays lightweight.
+- Preview review and auto-advance invalidation now refresh the ledger signals together with the latest run state.
+
+### 3. Acceptance coverage was extended
+
+- Updated tests in:
+  - `frontend/src/components/pipeline/DeliveryLedgerCard.test.tsx`
+  - `frontend/src/pages/SimpleDeliveryPage.test.tsx`
+- Coverage now verifies:
+  - change-batch filtering for ledger runs
+  - preview waiting / rejected / accepted labels
+  - quality passed / failed labels
+  - approvals and residual counters per run
+
+## Validation
+
+### Frontend tests
+
+Executed:
+
+- `npm test -- src/components/pipeline/DeliveryLedgerCard.test.tsx src/pages/SimpleDeliveryPage.test.tsx`
+- `npm test -- src/components/pipeline/DeliveryLedgerCard.test.tsx src/components/pipeline/DeliveryHandoffCard.test.tsx src/components/pipeline/AutonomyActivityCard.test.tsx src/pages/SimpleDeliveryPage.test.tsx src/pages/PipelinePage.test.tsx`
+
+Result: passed, including `18/18` related regression tests.
+
+### Frontend build
+
+Executed:
+
+- `npm run build`
+
+Result: passed.
+
+### Super Dev pipeline
+
+Executed:
+
+- `super-dev task status delivery-ledger-run-signals`
+- `super-dev task run delivery-ledger-run-signals`
+- `super-dev quality --type all`
+- `super-dev spec archive delivery-ledger-run-signals`
+
+Result:
+
+- Task completion: `4/4`
+- Quality gate: `87/100`
+- Archive path: `.super-dev/archive/delivery-ledger-run-signals/`
+
+## Remaining priorities
+
+### 1. Keep simplifying the user-facing result surface
+
+The simplified delivery page now includes:
+
+- requirement input
+- draft confirmation
+- auto-advance status
+- preview review entry
+- delivery ledger
+- autonomy activity summary
+- delivery handoff summary
+
+The next refinement is to make the primary user journey read even more clearly as:
+
+- input a need
+- confirm system understanding
+- review result / preview / pending items
+
+### 2. Strengthen the autonomous repair loop
+
+The system can already track run, preview, approval, and residual state, but it still needs a stronger scheduler loop for:
+
+- LLM-driven next-command decisions for `super-dev`
+- automatic collection of remaining implementation gaps after each phase
+- repeated dispatch until quality and acceptance conditions are satisfied
+
+### 3. Finish final preview and local-run guidance
+
+The product still needs a more complete user-facing finish line for:
+
+- final preview entry
+- local run instructions
+- process document preview and download
+
+## Recommended next step
+
+1. Add process-document preview and final preview entry to the simplified delivery result area.
+2. Bind the LLM evaluator more tightly to `super-dev` command dispatch for the residual-driven repair loop.
+3. Consolidate final acceptance, preview, and local-run guidance into one result-oriented surface.
+

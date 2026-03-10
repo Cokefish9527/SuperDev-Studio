@@ -1,6 +1,6 @@
 # Spec 任务执行报告
 
-- Change: `change-batch-delivery-ledger`
+- Change: `delivery-ledger-run-signals`
 - 总任务: 4
 - 已完成: 4
 - 未完成: 0

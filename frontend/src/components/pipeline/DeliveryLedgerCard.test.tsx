@@ -3,13 +3,27 @@ import { describe, expect, it } from 'vitest';
 import DeliveryLedgerCard from './DeliveryLedgerCard';
 
 describe('DeliveryLedgerCard', () => {
-  it('shows the attempt history for a change batch', () => {
+  it('shows the attempt history and richer signals for a change batch', () => {
     render(
       <DeliveryLedgerCard
         batchId="change-1"
         batchTitle="Timeline notebook"
         mode="step_by_step"
         currentRunId="run-2"
+        runSignals={{
+          'run-1': {
+            preview: 'rejected',
+            quality: 'failed',
+            openApprovals: 1,
+            openResiduals: 2,
+          },
+          'run-2': {
+            preview: 'accepted',
+            quality: 'passed',
+            openApprovals: 0,
+            openResiduals: 0,
+          },
+        }}
         runs={[
           {
             id: 'run-1',
@@ -46,6 +60,12 @@ describe('DeliveryLedgerCard', () => {
     expect(card).toHaveTextContent('Attempt 1');
     expect(card).toHaveTextContent('Attempt 2');
     expect(card).toHaveTextContent('Retried from run-1');
+    expect(card).toHaveTextContent('Preview accepted');
+    expect(card).toHaveTextContent('Quality passed');
+    expect(card).toHaveTextContent('Preview rejected');
+    expect(card).toHaveTextContent('Quality failed');
+    expect(card).toHaveTextContent('Approvals 1');
+    expect(card).toHaveTextContent('Residuals 2');
     expect(card).toHaveTextContent('current');
     expect(card).toHaveTextContent('latest');
   });

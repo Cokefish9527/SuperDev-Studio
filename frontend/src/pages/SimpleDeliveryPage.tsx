@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
   Button,
@@ -21,7 +21,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import AutonomyActivityCard from '../components/pipeline/AutonomyActivityCard';
 import DeliveryHandoffCard from '../components/pipeline/DeliveryHandoffCard';
-import DeliveryLedgerCard from '../components/pipeline/DeliveryLedgerCard';
+import DeliveryLedgerCard, { type DeliveryLedgerRunSignal } from '../components/pipeline/DeliveryLedgerCard';
 import { apiClient } from '../api/client';
 import { useProjectState } from '../state/project-context';
 import type {
@@ -31,6 +31,7 @@ import type {
   RequirementDocVersion,
   RequirementSessionBundle,
   ResidualItem,
+  RunEvent,
 } from '../types';
 
 const zh = {
@@ -200,6 +201,66 @@ function countOpenApprovalGates(items: ApprovalGate[]) {
   return items.filter((item) => item.status === 'open').length;
 }
 
+function buildDeliveryLedgerRunSignal({
+  events,
+  previewSessions,
+  approvalGates,
+  residualItems,
+}: {
+  events: RunEvent[];
+  previewSessions: PreviewSession[];
+  approvalGates: ApprovalGate[];
+  residualItems: ResidualItem[];
+}): DeliveryLedgerRunSignal {
+  return {
+    preview: deriveLedgerPreviewSignal(previewSessions),
+    quality: deriveLedgerQualitySignal(events),
+    openApprovals: countOpenApprovalGates(approvalGates),
+    openResiduals: countOpenResiduals(residualItems),
+  };
+}
+
+function deriveLedgerPreviewSignal(previewSessions: PreviewSession[]): DeliveryLedgerRunSignal['preview'] {
+  const latest = findLatestPreviewSession(previewSessions);
+  if (!latest) {
+    return 'missing';
+  }
+  switch (latest.status) {
+    case 'accepted':
+      return 'accepted';
+    case 'rejected':
+      return 'rejected';
+    case 'generated':
+      return 'pending';
+    default:
+      return 'missing';
+  }
+}
+
+function deriveLedgerQualitySignal(events: RunEvent[]): DeliveryLedgerRunSignal['quality'] {
+  const qualityEvent = [...events]
+    .filter((item) => item.stage.toLowerCase().includes('quality'))
+    .sort((left, right) => dayjs(right.created_at).valueOf() - dayjs(left.created_at).valueOf())[0];
+
+  if (!qualityEvent) {
+    return 'pending';
+  }
+
+  const message = qualityEvent.message.toLowerCase();
+  if (
+    qualityEvent.status === 'failed' ||
+    message.includes('quality gate failed') ||
+    message.includes('still failing') ||
+    message.includes('not passed')
+  ) {
+    return 'failed';
+  }
+  if (qualityEvent.status === 'completed' || message.includes('quality gate passed')) {
+    return 'passed';
+  }
+  return 'pending';
+}
+
 function updateBundleWithRun(bundle: RequirementSessionBundle | null, runId: string, run: RequirementSessionBundle['run']) {
   if (!bundle || !run) {
     return bundle;
@@ -236,6 +297,8 @@ export default function SimpleDeliveryPage() {
     void queryClient.invalidateQueries({ queryKey: ['simple-run-preview-sessions', runId] });
     void queryClient.invalidateQueries({ queryKey: ['simple-run-approval-gates', runId] });
     void queryClient.invalidateQueries({ queryKey: ['simple-run-residual-items', runId] });
+    void queryClient.invalidateQueries({ queryKey: ['simple-ledger-run-signal', runId] });
+    void queryClient.invalidateQueries({ queryKey: ['simple-change-batch-runs'] });
   };
 
   const projectQuery = useQuery({
@@ -439,6 +502,33 @@ export default function SimpleDeliveryPage() {
         .sort((left, right) => dayjs(left.created_at).valueOf() - dayjs(right.created_at).valueOf()),
     [changeBatchRunsQuery.data, latestChangeBatchId],
   );
+  const deliveryLedgerDisplayRuns = useMemo(() => deliveryLedgerRuns.slice(-6), [deliveryLedgerRuns]);
+  const deliveryLedgerSignalQueries = useQueries({
+    queries: deliveryLedgerDisplayRuns.map((item) => ({
+      queryKey: ['simple-ledger-run-signal', item.id],
+      queryFn: async (): Promise<DeliveryLedgerRunSignal> => {
+        const [events, previewSessions, approvalGates, residualItems] = await Promise.all([
+          apiClient.listRunEvents(item.id),
+          apiClient.listRunPreviewSessions(item.id),
+          apiClient.listRunApprovalGates(item.id),
+          apiClient.listRunResidualItems(item.id),
+        ]);
+        return buildDeliveryLedgerRunSignal({ events, previewSessions, approvalGates, residualItems });
+      },
+      enabled: !!latestChangeBatchId,
+      staleTime: 30000,
+    })),
+  });
+  const deliveryLedgerSignals = Object.fromEntries(
+    deliveryLedgerDisplayRuns
+      .map((item, index) => {
+        const signal = deliveryLedgerSignalQueries[index]?.data;
+        return signal ? [item.id, signal] : null;
+      })
+      .filter((item): item is [string, DeliveryLedgerRunSignal] => item !== null),
+  );
+  const deliveryLedgerLoading =
+    changeBatchRunsQuery.isLoading || deliveryLedgerSignalQueries.some((query) => query.isLoading);
   const openApprovalGateCount = countOpenApprovalGates(approvalGates);
   const openResidualCount = countOpenResiduals(residualItems);
   const latestEvaluation = agentQuery.data?.latest_evaluation;
@@ -797,9 +887,11 @@ export default function SimpleDeliveryPage() {
                 batchId={latestChangeBatchId}
                 batchTitle={sessionBundle?.change_batch?.title || latest?.title}
                 mode={sessionBundle?.change_batch?.mode || (run?.full_cycle ? 'full_cycle' : run?.step_by_step ? 'step_by_step' : '')}
-                runs={deliveryLedgerRuns}
+                runs={deliveryLedgerDisplayRuns}
+                totalAttempts={deliveryLedgerRuns.length}
                 currentRunId={latestRunId}
-                loading={changeBatchRunsQuery.isLoading}
+                runSignals={deliveryLedgerSignals}
+                loading={deliveryLedgerLoading}
               />
             </Space>
           )}

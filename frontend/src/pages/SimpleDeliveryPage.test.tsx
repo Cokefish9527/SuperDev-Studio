@@ -348,46 +348,125 @@ describe('SimpleDeliveryPage', () => {
         created_at: '2026-03-10T00:00:00Z',
       },
     });
-    vi.mocked(apiClient.listRunPreviewSessions).mockResolvedValue([
-      {
-        id: 'preview-1',
-        project_id: 'project-1',
-        pipeline_run_id: 'run-preview',
-        preview_url: '/api/pipeline/runs/run-preview/preview',
-        preview_type: 'html',
-        title: 'Preview build',
-        source_key: 'preview:1',
-        status: 'generated',
-        created_at: '2026-03-10T00:00:00Z',
-        updated_at: '2026-03-10T00:00:00Z',
-      },
-    ]);
-    vi.mocked(apiClient.listRunEvents).mockResolvedValue([
-      {
-        id: 1,
-        run_id: 'run-preview',
-        stage: 'auto-advance',
-        status: 'log',
-        message: 'Auto advance executed review_preview and kept waiting for preview sign-off',
-        created_at: '2026-03-10T00:00:30Z',
-      },
-      {
-        id: 2,
-        run_id: 'run-preview',
-        stage: 'backlog-reconcile',
-        status: 'completed',
-        message: 'Residual backlog re-evaluated: closed 1 historical item.',
-        created_at: '2026-03-10T00:00:40Z',
-      },
-      {
-        id: 3,
-        run_id: 'run-preview',
-        stage: 'lifecycle-quality',
-        status: 'completed',
-        message: 'Quality gate passed on iteration 1',
-        created_at: '2026-03-10T00:00:50Z',
-      },
-    ]);
+    vi.mocked(apiClient.listRunPreviewSessions).mockImplementation(async (runId: string) => {
+      if (runId === 'run-preview') {
+        return [
+          {
+            id: 'preview-1',
+            project_id: 'project-1',
+            pipeline_run_id: 'run-preview',
+            preview_url: '/api/pipeline/runs/run-preview/preview',
+            preview_type: 'html',
+            title: 'Preview build',
+            source_key: 'preview:1',
+            status: 'generated',
+            created_at: '2026-03-10T00:00:00Z',
+            updated_at: '2026-03-10T00:00:00Z',
+          },
+        ];
+      }
+      if (runId === 'run-initial') {
+        return [
+          {
+            id: 'preview-old',
+            project_id: 'project-1',
+            pipeline_run_id: 'run-initial',
+            preview_url: '/api/pipeline/runs/run-initial/preview',
+            preview_type: 'html',
+            title: 'Initial preview',
+            source_key: 'preview:old',
+            status: 'rejected',
+            created_at: '2026-03-10T00:00:00Z',
+            updated_at: '2026-03-10T00:00:10Z',
+          },
+        ];
+      }
+      return [];
+    });
+    vi.mocked(apiClient.listRunEvents).mockImplementation(async (runId: string) => {
+      if (runId === 'run-preview') {
+        return [
+          {
+            id: 1,
+            run_id: 'run-preview',
+            stage: 'auto-advance',
+            status: 'log',
+            message: 'Auto advance executed review_preview and kept waiting for preview sign-off',
+            created_at: '2026-03-10T00:00:30Z',
+          },
+          {
+            id: 2,
+            run_id: 'run-preview',
+            stage: 'backlog-reconcile',
+            status: 'completed',
+            message: 'Residual backlog re-evaluated: closed 1 historical item.',
+            created_at: '2026-03-10T00:00:40Z',
+          },
+          {
+            id: 3,
+            run_id: 'run-preview',
+            stage: 'lifecycle-quality',
+            status: 'completed',
+            message: 'Quality gate passed on iteration 1',
+            created_at: '2026-03-10T00:00:50Z',
+          },
+        ];
+      }
+      if (runId === 'run-initial') {
+        return [
+          {
+            id: 11,
+            run_id: 'run-initial',
+            stage: 'lifecycle-quality',
+            status: 'failed',
+            message: 'Quality gate failed on iteration 0',
+            created_at: '2026-03-10T00:00:10Z',
+          },
+        ];
+      }
+      return [];
+    });
+    vi.mocked(apiClient.listRunApprovalGates).mockImplementation(async (runId: string) => {
+      if (runId === 'run-initial') {
+        return [
+          {
+            id: 'gate-1',
+            project_id: 'project-1',
+            pipeline_run_id: 'run-initial',
+            gate_type: 'tool_governance',
+            title: 'Manual approval',
+            detail: 'Need approval',
+            source_key: 'gate:1',
+            status: 'open',
+            created_at: '2026-03-10T00:00:00Z',
+            updated_at: '2026-03-10T00:00:00Z',
+          },
+        ];
+      }
+      return [];
+    });
+    vi.mocked(apiClient.listRunResidualItems).mockImplementation(async (runId: string) => {
+      if (runId === 'run-initial') {
+        return [
+          {
+            id: 'residual-1',
+            project_id: 'project-1',
+            pipeline_run_id: 'run-initial',
+            stage: 'quality',
+            category: 'quality',
+            severity: 'high',
+            summary: 'Need more tests',
+            evidence: 'tests missing',
+            suggested_command: 'rerun',
+            source_key: 'residual:1',
+            status: 'open',
+            created_at: '2026-03-10T00:00:00Z',
+            updated_at: '2026-03-10T00:00:00Z',
+          },
+        ];
+      }
+      return [];
+    });
     vi.mocked(apiClient.listRuns).mockResolvedValue([
       {
         id: 'run-initial',
@@ -471,6 +550,12 @@ describe('SimpleDeliveryPage', () => {
     expect(await screen.findByTestId('simple-delivery-ledger-card')).toHaveTextContent('Attempt 1');
     expect(screen.getByTestId('simple-delivery-ledger-card')).toHaveTextContent('Attempt 2');
     expect(screen.getByTestId('simple-delivery-ledger-card')).toHaveTextContent('Initial timeline notebook run');
+    expect(screen.getByTestId('simple-delivery-ledger-card')).toHaveTextContent('Preview waiting');
+    expect(screen.getByTestId('simple-delivery-ledger-card')).toHaveTextContent('Quality passed');
+    expect(screen.getByTestId('simple-delivery-ledger-card')).toHaveTextContent('Preview rejected');
+    expect(screen.getByTestId('simple-delivery-ledger-card')).toHaveTextContent('Quality failed');
+    expect(screen.getByTestId('simple-delivery-ledger-card')).toHaveTextContent('Approvals 1');
+    expect(screen.getByTestId('simple-delivery-ledger-card')).toHaveTextContent('Residuals 1');
     expect(screen.getByTestId('simple-delivery-ledger-card')).not.toHaveTextContent('Other batch run');
 
     await userEvent.click(await screen.findByTestId('simple-delivery-preview-accept'));
