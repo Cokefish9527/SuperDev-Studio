@@ -202,7 +202,16 @@ func latestAgentEvaluation(items []store.AgentEvaluation) *store.AgentEvaluation
 
 func resolveAutoAdvanceNextCommand(run store.PipelineRun, evaluation *store.AgentEvaluation, previewSessions []store.PreviewSession) string {
 	if evaluation != nil && strings.TrimSpace(evaluation.NextCommand) != "" {
-		return strings.ToLower(strings.TrimSpace(evaluation.NextCommand))
+		candidate := strings.ToLower(strings.TrimSpace(evaluation.NextCommand))
+		if candidate == "review_preview" && !hasGeneratedPreview(previewSessions) {
+			switch {
+			case hasRejectedPreview(previewSessions):
+				return "rerun_delivery"
+			case hasAcceptedPreview(previewSessions):
+				return "complete_delivery"
+			}
+		}
+		return candidate
 	}
 	switch {
 	case strings.EqualFold(run.Status, "failed"):
@@ -230,6 +239,24 @@ func hasOpenApprovalGate(items []store.ApprovalGate) bool {
 func hasGeneratedPreview(items []store.PreviewSession) bool {
 	for _, item := range items {
 		if strings.EqualFold(strings.TrimSpace(item.Status), "generated") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAcceptedPreview(items []store.PreviewSession) bool {
+	for _, item := range items {
+		if strings.EqualFold(strings.TrimSpace(item.Status), "accepted") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRejectedPreview(items []store.PreviewSession) bool {
+	for _, item := range items {
+		if strings.EqualFold(strings.TrimSpace(item.Status), "rejected") {
 			return true
 		}
 	}

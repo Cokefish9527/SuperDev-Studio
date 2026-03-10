@@ -481,3 +481,37 @@
 1. ? `auto-advance` ?? `SimpleDeliveryPage`
 2. ????????????????????
 3. ?????????? residual / preview / approval ?????????
+
+
+---
+
+# Agent Confirmed Delivery Loop - Progress Update (2026-03-10, simple-delivery-auto-advance)
+
+## Phase goal
+
+Bring the safe auto-advance loop down from `PipelinePage` into the simplified user-facing delivery flow.
+
+## What is now complete
+
+- `SimpleDeliveryPage` can automatically continue safe follow-up execution for completed and failed runs.
+- Preview acceptance and rejection can be handled directly from the simple page.
+- Backend preview-state resolution now converts accepted preview review into `complete_delivery` and rejected review into `rerun_delivery`.
+- High-risk approvals still remain explicit and redirect users to `PipelinePage`.
+- The phase has frontend tests, backend tests, a passing production build, and a passing Super Dev quality gate (`83/100`).
+
+## What this unlocks
+
+The product now supports a stronger minimal workflow:
+
+- short requirement input
+- requirement draft confirmation
+- automatic delivery start
+- simple-page progress visibility
+- simple-page preview acceptance
+- automatic safe continuation after evaluation
+
+## Remaining broader roadmap after this phase
+
+1. Add a persistent background scheduler so safe dispatch does not depend on the page being open.
+2. Let the evaluator continuously reassess unresolved residual items after each new run.
+3. Add a clearer end-state acceptance / release handoff view for the final preview and pre-release package.
