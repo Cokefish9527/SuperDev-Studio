@@ -49,9 +49,9 @@ export default function DeliveryHandoffCard({
   loading,
 }: Props) {
   return (
-    <Card title="???? / ?????" style={{ borderRadius: 20 }} loading={loading} data-testid="delivery-handoff-card">
+    <Card title="Delivery Handoff / Readiness" style={{ borderRadius: 20 }} loading={loading} data-testid="delivery-handoff-card">
       {!run ? (
-        <Empty description="????????????" />
+        <Empty description="Run data is not available yet" />
       ) : (
         <HandoffBody
           summary={buildHandoffSummary({ run, completion, events, previewSessions, approvalGates, residualItems, apiBase })}
@@ -101,12 +101,12 @@ function HandoffBody({ summary, apiBase }: { summary: HandoffSummary; apiBase: s
 
       <div>
         <Space wrap style={{ marginBottom: 8 }}>
-          <Typography.Text strong>???</Typography.Text>
-          <Tag color="blue">{summary.packageArtifacts.length} ?</Tag>
+          <Typography.Text strong>Artifacts</Typography.Text>
+          <Tag color="blue">{summary.packageArtifacts.length} files</Tag>
         </Space>
         {!summary.packageArtifacts.length ? (
           <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            ????????????????????????????
+            No preview or report artifacts are ready yet.
           </Typography.Paragraph>
         ) : (
           <Space wrap>
@@ -125,7 +125,7 @@ function HandoffBody({ summary, apiBase }: { summary: HandoffSummary; apiBase: s
             })}
             {summary.previewHref ? (
               <Button size="small" type="primary" onClick={() => window.open(summary.previewHref, '_blank', 'noopener,noreferrer')}>
-                ??????
+                Open preview
               </Button>
             ) : null}
           </Space>
@@ -165,8 +165,8 @@ function buildHandoffSummary({
     const blocking = checks.find((check) => check.status === 'failed');
     return {
       overall: 'blocked',
-      title: '???????????',
-      description: blocking?.note || '?????????????????',
+      title: 'Release handoff is blocked',
+      description: blocking?.note || 'Resolve the blocking items before continuing to handoff.',
       checks,
       packageArtifacts,
       previewHref,
@@ -176,8 +176,8 @@ function buildHandoffSummary({
   if (run.status === 'completed' && previewCheck.status === 'completed' && qualityCheck.status === 'completed' && packageCheck.status === 'completed') {
     return {
       overall: 'ready',
-      title: '??????????',
-      description: '??????????????????????????????????',
+      title: 'Release handoff is ready',
+      description: 'Preview, quality, and package checks are complete. The run is ready for final review and pre-release handoff.',
       checks,
       packageArtifacts,
       previewHref,
@@ -186,8 +186,8 @@ function buildHandoffSummary({
 
   return {
     overall: 'in_progress',
-    title: '????????????',
-    description: '???????????????????????????????????????',
+    title: 'Release handoff is still in progress',
+    description: 'Some checks are still running or waiting for a human decision before the handoff package is fully ready.',
     checks,
     packageArtifacts,
     previewHref,
@@ -199,40 +199,40 @@ function buildPreviewCheck(run: PipelineRun, completion: PipelineCompletion | un
   if (latest?.status === 'accepted') {
     return {
       key: 'preview',
-      title: '????',
+      title: 'Preview',
       status: 'completed',
-      note: latest.reviewer_note || '?????????????',
+      note: latest.reviewer_note || 'Preview was accepted and is ready for handoff.',
     };
   }
   if (latest?.status === 'rejected') {
     return {
       key: 'preview',
-      title: '????',
+      title: 'Preview',
       status: 'failed',
-      note: latest.reviewer_note || '?????????????????????',
+      note: latest.reviewer_note || 'Preview was rejected and must be regenerated before handoff.',
     };
   }
   if (latest?.status === 'generated' || completion?.preview_url) {
     return {
       key: 'preview',
-      title: '????',
+      title: 'Preview',
       status: 'in_progress',
-      note: latest?.reviewer_note || '???????????????????',
+      note: latest?.reviewer_note || 'Preview is generated and waiting for reviewer sign-off.',
     };
   }
   if (run.status === 'completed') {
     return {
       key: 'preview',
-      title: '????',
+      title: 'Preview',
       status: 'missing',
-      note: '??????????????????????????',
+      note: 'The run finished, but no preview artifact was found for final review.',
     };
   }
   return {
     key: 'preview',
-    title: '????',
+    title: 'Preview',
     status: 'in_progress',
-    note: '?????????????',
+    note: 'Preview has not been generated yet.',
   };
 }
 
@@ -244,7 +244,7 @@ function buildQualityCheck(run: PipelineRun, completion: PipelineCompletion | un
     if (item.status === 'completed' || lowerMessage.includes('quality gate passed')) {
       return {
         key: 'quality',
-        title: '????',
+        title: 'Quality',
         status: 'completed',
         note: item.message,
       };
@@ -252,7 +252,7 @@ function buildQualityCheck(run: PipelineRun, completion: PipelineCompletion | un
     if (item.status === 'failed' || lowerMessage.includes('still failing') || lowerMessage.includes('not passed')) {
       return {
         key: 'quality',
-        title: '????',
+        title: 'Quality',
         status: 'failed',
         note: item.message,
       };
@@ -262,26 +262,28 @@ function buildQualityCheck(run: PipelineRun, completion: PipelineCompletion | un
   if (hasQualityArtifact(completion?.artifacts || [])) {
     return {
       key: 'quality',
-      title: '????',
+      title: 'Quality',
       status: run.status === 'completed' ? 'completed' : 'in_progress',
-      note: run.status === 'completed' ? '????????????????????' : '?????????????????????',
+      note: run.status === 'completed'
+        ? 'Quality artifacts are available and the run completed successfully.'
+        : 'Quality artifacts are being generated for this run.',
     };
   }
 
   if (run.status === 'failed') {
     return {
       key: 'quality',
-      title: '????',
+      title: 'Quality',
       status: 'failed',
-      note: '?????????????????????',
+      note: 'The run failed before the quality gate could pass.',
     };
   }
 
   return {
     key: 'quality',
-    title: '????',
+    title: 'Quality',
     status: 'in_progress',
-    note: '?????????????',
+    note: 'Quality validation is still running.',
   };
 }
 
@@ -290,16 +292,16 @@ function buildApprovalCheck(approvalGates: ApprovalGate[]): HandoffCheck {
   if (openCount > 0) {
     return {
       key: 'approval',
-      title: '?????',
+      title: 'Approvals',
       status: 'failed',
-      note: `?? ${openCount} ?????????????`,
+      note: `${openCount} approval gate(s) still need human review.`,
     };
   }
   return {
     key: 'approval',
-    title: '?????',
+    title: 'Approvals',
     status: 'completed',
-    note: '???????????????',
+    note: 'No open approval gates remain.',
   };
 }
 
@@ -308,16 +310,16 @@ function buildResidualCheck(residualItems: ResidualItem[]): HandoffCheck {
   if (openCount > 0) {
     return {
       key: 'residual',
-      title: '????',
+      title: 'Residuals',
       status: 'failed',
-      note: `?? ${openCount} ??????????????????`,
+      note: `${openCount} residual item(s) still need follow-up.`,
     };
   }
   return {
     key: 'residual',
-    title: '????',
+    title: 'Residuals',
     status: 'completed',
-    note: '?????????? open residual items?',
+    note: 'No open residual items remain.',
   };
 }
 
@@ -325,24 +327,24 @@ function buildPackageCheck(run: PipelineRun, packageArtifacts: PipelineArtifact[
   if (packageArtifacts.length > 0) {
     return {
       key: 'package',
-      title: '???',
+      title: 'Package',
       status: 'completed',
-      note: `??? ${packageArtifacts.length} ?????????`,
+      note: `${packageArtifacts.length} handoff artifact(s) are ready to review.`,
     };
   }
   if (run.status === 'completed') {
     return {
       key: 'package',
-      title: '???',
+      title: 'Package',
       status: 'missing',
-      note: '??????????????????????',
+      note: 'The run completed, but no handoff artifacts were collected.',
     };
   }
   return {
     key: 'package',
-    title: '???',
+    title: 'Package',
     status: 'in_progress',
-    note: '??????????????',
+    note: 'The handoff package is still being assembled.',
   };
 }
 
@@ -427,12 +429,12 @@ function checkStatusColor(status: CheckStatus) {
 function checkStatusLabel(status: CheckStatus) {
   switch (status) {
     case 'completed':
-      return '??';
+      return 'Passed';
     case 'failed':
-      return '??';
+      return 'Blocked';
     case 'missing':
-      return '??';
+      return 'Missing';
     default:
-      return '???';
+      return 'Running';
   }
 }

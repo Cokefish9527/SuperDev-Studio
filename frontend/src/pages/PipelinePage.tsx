@@ -1178,11 +1178,11 @@ function RunFollowupsCard({
   const openGates = approvalGates.filter((item) => item.status === 'open');
 
   return (
-    <Card title="???????" style={{ borderRadius: 20 }} loading={loading}>
+    <Card title="Open follow-ups" style={{ borderRadius: 20 }} loading={loading}>
       {!openResiduals.length && !openGates.length ? (
-        <Empty description="???????????" />
+        <Empty description="No approval gates or residual follow-ups remain." />
       ) : (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
           <Space wrap>
             <Tag color="volcano">Open Residuals {openResiduals.length}</Tag>
             <Tag color="gold">Open Gates {openGates.length}</Tag>
@@ -1190,8 +1190,8 @@ function RunFollowupsCard({
 
           {openGates.length ? (
             <div>
-              <Typography.Text strong>???</Typography.Text>
-              <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
+              <Typography.Text strong>Approval gates</Typography.Text>
+              <Space orientation="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
                 {openGates.map((gate) => (
                   <div key={gate.id} style={{ border: '1px solid #fcd34d', borderRadius: 12, padding: 12 }}>
                     <Space wrap>
@@ -1211,8 +1211,8 @@ function RunFollowupsCard({
 
           {openResiduals.length ? (
             <div>
-              <Typography.Text strong>???</Typography.Text>
-              <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
+              <Typography.Text strong>Residual items</Typography.Text>
+              <Space orientation="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
                 {openResiduals.map((item) => (
                   <div key={item.id} style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12 }}>
                     <Space wrap>
@@ -1227,7 +1227,7 @@ function RunFollowupsCard({
                     ) : null}
                     {item.suggested_command ? (
                       <Typography.Paragraph style={{ marginBottom: 0, marginTop: 8 }}>
-                        ?????<Typography.Text code>{item.suggested_command}</Typography.Text>
+                        Suggested command: <Typography.Text code>{item.suggested_command}</Typography.Text>
                       </Typography.Paragraph>
                     ) : null}
                     <Space style={{ marginTop: 8 }}>
@@ -1236,7 +1236,7 @@ function RunFollowupsCard({
                         onClick={() => onResolveResidual(item.id)}
                         loading={resolvingItemId === item.id}
                       >
-                        ?????
+                        Mark resolved
                       </Button>
                     </Space>
                   </div>
@@ -1272,7 +1272,7 @@ function PreviewAcceptanceCard({
       {!latestSessions.length ? (
         <Empty description="当前运行尚未生成可追踪的预览会话" />
       ) : (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
           <Tag color="blue">Preview Sessions {latestSessions.length}</Tag>
           {latestSessions.map((session) => {
             const previewHref = buildAbsolutePreviewHref(apiBase, session.preview_url);

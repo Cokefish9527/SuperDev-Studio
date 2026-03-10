@@ -22,7 +22,7 @@ const baseCompletion = {
   preview_url: '/api/pipeline/runs/run-1/preview/index.html',
   artifacts: [
     {
-      name: '??????',
+      name: 'Frontend preview',
       path: 'output/frontend/index.html',
       kind: 'frontend',
       size_bytes: 128,
@@ -32,7 +32,7 @@ const baseCompletion = {
       stage: 'output',
     },
     {
-      name: '??????',
+      name: 'Quality gate report',
       path: 'output/superdev-studio-quality-gate.md',
       kind: 'markdown',
       size_bytes: 256,
@@ -42,7 +42,7 @@ const baseCompletion = {
       stage: 'superdev',
     },
     {
-      name: '????',
+      name: 'Red-team report',
       path: 'output/superdev-studio-redteam.md',
       kind: 'markdown',
       size_bytes: 256,
@@ -52,7 +52,7 @@ const baseCompletion = {
       stage: 'superdev',
     },
     {
-      name: '????',
+      name: 'Execution plan',
       path: 'output/superdev-studio-execution-plan.md',
       kind: 'markdown',
       size_bytes: 256,
@@ -101,11 +101,11 @@ describe('DeliveryHandoffCard', () => {
       />,
     );
 
-    expect(screen.getByTestId('delivery-handoff-alert')).toHaveTextContent('??????????');
+    expect(screen.getByTestId('delivery-handoff-alert')).toHaveTextContent('Release handoff is ready');
     expect(screen.getByText('Quality gate passed on iteration 1')).toBeInTheDocument();
-    expect(screen.getAllByText('???').length).toBeGreaterThan(0);
+    expect(screen.getByText('Artifacts')).toBeInTheDocument();
+    expect(screen.getByText('4 files')).toBeInTheDocument();
     expect(screen.getAllByRole('button').length).toBeGreaterThanOrEqual(4);
-    expect(screen.getByText('4 ?')).toBeInTheDocument();
   });
 
   it('shows a blocked handoff state when open approvals or residuals still exist', () => {
@@ -134,7 +134,7 @@ describe('DeliveryHandoffCard', () => {
             project_id: 'project-1',
             pipeline_run_id: 'run-1',
             gate_type: 'tool_governance',
-            title: '??',
+            title: 'Manual approval',
             detail: 'need approval',
             source_key: 'gate:1',
             status: 'open',
@@ -163,8 +163,8 @@ describe('DeliveryHandoffCard', () => {
       />,
     );
 
-    expect(screen.getByTestId('delivery-handoff-alert')).toHaveTextContent('???????????');
-    expect(screen.getAllByText('?? 1 ?????????????').length).toBeGreaterThan(0);
-    expect(screen.getByText('?? 1 ??????????????????')).toBeInTheDocument();
+    expect(screen.getByTestId('delivery-handoff-alert')).toHaveTextContent('Release handoff is blocked');
+    expect(screen.getAllByText('1 approval gate(s) still need human review.').length).toBeGreaterThan(0);
+    expect(screen.getByText('1 residual item(s) still need follow-up.')).toBeInTheDocument();
   });
 });

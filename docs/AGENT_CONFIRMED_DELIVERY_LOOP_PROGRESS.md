@@ -645,3 +645,32 @@ Expose autonomous delivery progress more clearly on the simplified delivery page
 
 1. Add a change-batch level delivery ledger so users can review prior autonomous attempts and outcomes.
 2. Add SOP / demo capture material for the end-to-end flow once the product path is stable enough for a formal walkthrough.
+
+
+---
+
+# Agent Confirmed Delivery Loop - Progress Update (2026-03-11, delivery-ui-copy-cleanup)
+
+## Phase goal
+
+Clean up garbled delivery UI copy so the handoff and follow-up views are understandable to both simplified users and operator users.
+
+## What is now complete
+
+- Rewrote the shared `DeliveryHandoffCard` copy into readable release-readiness language.
+- Cleaned the `PipelinePage` follow-up panel copy for approval gates, residual items, suggested commands, and resolve actions.
+- Updated the delivery handoff component tests and re-verified the relevant page suites.
+- Confirmed the touched delivery-facing frontend areas no longer contain `????` placeholder text.
+- This phase passed the Super Dev quality gate (`87/100`).
+
+## What this unlocks
+
+- users can now understand the final handoff state without decoding broken labels
+- operator follow-up actions are easier to scan and execute during residual cleanup
+- the simplified delivery flow is more credible as a product surface because core result cards now read cleanly
+
+## Remaining broader roadmap after this phase
+
+1. Add a change-batch level delivery ledger so users can review prior autonomous attempts and outcomes.
+2. Unify the remaining delivery-related UI copy across other summary surfaces.
+3. Add SOP / demo capture material for the end-to-end flow once the product path is stable enough for a formal walkthrough.
