@@ -1,22 +1,14 @@
-# Spec Task Execution Report
+# Spec 任务执行报告
 
-- Change: `simple-delivery-auto-advance`
-- Total tasks: 4
-- Completed: 4
-- Pending: 0
+- Change: `background-auto-advance-worker`
+- 总任务: 4
+- 已完成: 4
+- 未完成: 0
 
-## Completed tasks
+## 自动修复记录
 
-1. Backend auto-advance now resolves accepted preview review to `complete_delivery` and rejected preview review to `rerun_delivery`.
-2. Backend API regression tests cover both accepted-preview completion and rejected-preview retry flows.
-3. `SimpleDeliveryPage` now supports safe auto-advance, preview accept/reject actions, blocker messaging, and manual approval fallback to `PipelinePage`.
-4. Frontend regression coverage and production build validation were completed for the simplified flow.
+- 无
 
-## Auto-fix notes
+## 未完成任务
 
-- `super-dev task run` did not need to generate additional code changes in this pass.
-- Verification was completed with targeted backend tests, targeted frontend tests, and a production frontend build.
-
-## Remaining tasks
-
-- None.
+- 无

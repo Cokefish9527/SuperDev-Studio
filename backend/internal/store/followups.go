@@ -127,6 +127,9 @@ func (s *Store) UpsertResidualItem(ctx context.Context, item ResidualItem) (Resi
 	if err != nil {
 		return ResidualItem{}, err
 	}
+	if touchErr := s.TouchPipelineRun(ctx, item.PipelineRunID); touchErr != nil {
+		return ResidualItem{}, touchErr
+	}
 	return item, nil
 }
 

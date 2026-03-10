@@ -861,10 +861,12 @@ func collectRunOutputMarkdownFiles(projectDir string, run store.PipelineRun) []s
 }
 
 func (m *Manager) touchChangeBatch(ctx context.Context, changeBatchID, status, latestRunID, externalChangeID string) {
-	if strings.TrimSpace(changeBatchID) == "" {
+	trimmedChangeBatchID := strings.TrimSpace(changeBatchID)
+	if trimmedChangeBatchID == "" {
 		return
 	}
-	_, _ = m.store.UpdateChangeBatch(ctx, strings.TrimSpace(changeBatchID), status, latestRunID, externalChangeID)
+	_, _ = m.store.UpdateChangeBatch(ctx, trimmedChangeBatchID, status, latestRunID, externalChangeID)
+	_ = m.store.SyncRequirementSessionsLatestRunByChangeBatch(ctx, trimmedChangeBatchID, latestRunID)
 }
 
 func (m *Manager) bindExternalChangeID(ctx context.Context, runID, changeBatchID, externalChangeID string) {

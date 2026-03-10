@@ -515,3 +515,35 @@ The product now supports a stronger minimal workflow:
 1. Add a persistent background scheduler so safe dispatch does not depend on the page being open.
 2. Let the evaluator continuously reassess unresolved residual items after each new run.
 3. Add a clearer end-state acceptance / release handoff view for the final preview and pre-release package.
+
+
+---
+
+# Agent Confirmed Delivery Loop - Progress Update (2026-03-10, background-auto-advance-worker)
+
+## Phase goal
+
+Add a persistent background scheduler so safe dispatch does not depend on `PipelinePage` or `SimpleDeliveryPage` being open.
+
+## What is now complete
+
+- The backend now runs a persistent auto-advance worker during app runtime.
+- The worker scans leaf terminal runs and reuses the same safe `autoAdvancePipeline(...)` logic already used by the UI.
+- Requirement sessions now sync their `latest_run_id` from the owning change batch, so users return to the current run instead of an outdated failed run.
+- Preview and residual updates now touch the related pipeline run timestamp, making it easier for the worker to pick up newly changed runs.
+- This phase has backend tests, frontend validation, a passing build, and a passing Super Dev quality gate (`87/100`).
+
+## What this unlocks
+
+The product can now continue the safe part of the delivery loop even when the user leaves the page:
+
+- page-open auto advance still works
+- page-closed backend auto advance now also works
+- retry dispatch can continue in the background
+- simplified delivery re-entry is more accurate because latest run pointers stay synchronized
+
+## Remaining broader roadmap after this phase
+
+1. Let the evaluator continuously reassess unresolved residual items after each new run and actively shrink the backlog.
+2. Add a clearer final acceptance / release handoff view for preview approval, quality outcome, and pre-release package delivery.
+3. Make background dispatch status more visible in the UI timeline so users can see autonomous progress without opening the full pipeline trace.

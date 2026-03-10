@@ -150,3 +150,20 @@ func TestLoadConfigReadsRateLimitEnv(t *testing.T) {
 		t.Fatalf("expected pipeline limit 3, got %d", cfg.APIPipelineLimit)
 	}
 }
+
+func TestLoadConfigReadsAutoAdvanceWorkerEnv(t *testing.T) {
+	t.Setenv("SUPERDEV_STUDIO_AUTO_ADVANCE_WORKER_ENABLED", "false")
+	t.Setenv("SUPERDEV_STUDIO_AUTO_ADVANCE_WORKER_INTERVAL", "15s")
+	t.Setenv("SUPERDEV_STUDIO_AUTO_ADVANCE_WORKER_BATCH_SIZE", "3")
+
+	cfg := LoadConfig()
+	if cfg.AutoAdvanceWorkerEnabled {
+		t.Fatalf("expected auto advance worker to be disabled via env")
+	}
+	if cfg.AutoAdvanceWorkerInterval != 15*time.Second {
+		t.Fatalf("expected auto advance worker interval 15s, got %s", cfg.AutoAdvanceWorkerInterval)
+	}
+	if cfg.AutoAdvanceWorkerBatchSize != 3 {
+		t.Fatalf("expected auto advance worker batch size 3, got %d", cfg.AutoAdvanceWorkerBatchSize)
+	}
+}

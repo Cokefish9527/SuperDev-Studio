@@ -107,6 +107,12 @@ func (s *Server) autoAdvancePipeline(ctx context.Context, run store.PipelineRun)
 			return autoAdvancePipelineResponse{}, err
 		}
 		_, _ = s.store.AppendRunEvent(ctx, store.RunEvent{
+			RunID:   state.run.ID,
+			Stage:   "auto-advance",
+			Status:  "log",
+			Message: fmt.Sprintf("Auto advance executed %s and started run %s", state.nextCommand, nextRun.ID),
+		})
+		_, _ = s.store.AppendRunEvent(ctx, store.RunEvent{
 			RunID:   nextRun.ID,
 			Stage:   "auto-advance",
 			Status:  "log",

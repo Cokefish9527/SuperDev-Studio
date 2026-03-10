@@ -190,6 +190,9 @@ func (s *Store) UpdatePreviewSessionStatus(ctx context.Context, id, status, revi
 	if err != nil {
 		return PreviewSession{}, err
 	}
+	if touchErr := s.TouchPipelineRun(ctx, item.PipelineRunID); touchErr != nil {
+		return PreviewSession{}, touchErr
+	}
 	return item, nil
 }
 

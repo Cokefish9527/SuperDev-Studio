@@ -22,36 +22,42 @@ import (
 )
 
 type Config struct {
-	Addr                string
-	DBPath              string
-	SuperDevCmd         string
-	SuperDevWorkdir     string
-	VolcengineAPIKey    string
-	VolcengineModel     string
-	VolcengineBaseURL   string
-	APIRateLimitEnabled bool
-	APIRateLimitWindow  time.Duration
-	APIMutationLimit    int
-	APIExpensiveLimit   int
-	APIPipelineLimit    int
+	Addr                       string
+	DBPath                     string
+	SuperDevCmd                string
+	SuperDevWorkdir            string
+	VolcengineAPIKey           string
+	VolcengineModel            string
+	VolcengineBaseURL          string
+	APIRateLimitEnabled        bool
+	APIRateLimitWindow         time.Duration
+	APIMutationLimit           int
+	APIExpensiveLimit          int
+	APIPipelineLimit           int
+	AutoAdvanceWorkerEnabled   bool
+	AutoAdvanceWorkerInterval  time.Duration
+	AutoAdvanceWorkerBatchSize int
 }
 
 func LoadConfig() Config {
 	loadDotEnv()
 
 	return Config{
-		Addr:                envOrDefault("SUPERDEV_STUDIO_ADDR", ":8080"),
-		DBPath:              envOrDefault("SUPERDEV_STUDIO_DB", "./data/superdev_studio.db"),
-		SuperDevCmd:         envOrDefault("SUPER_DEV_CMD", "python -m super_dev.cli"),
-		SuperDevWorkdir:     envOrDefault("SUPER_DEV_WORKDIR", ""),
-		VolcengineAPIKey:    envOrDefault("VOLCENGINE_ARK_API_KEY", ""),
-		VolcengineModel:     envOrDefault("VOLCENGINE_ARK_MODEL", ""),
-		VolcengineBaseURL:   envOrDefault("VOLCENGINE_ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"),
-		APIRateLimitEnabled: envBoolOrDefault("SUPERDEV_STUDIO_API_RATE_LIMIT_ENABLED", true),
-		APIRateLimitWindow:  envDurationOrDefault("SUPERDEV_STUDIO_API_RATE_LIMIT_WINDOW", time.Minute),
-		APIMutationLimit:    envIntOrDefault("SUPERDEV_STUDIO_API_RATE_LIMIT_MUTATION", 24),
-		APIExpensiveLimit:   envIntOrDefault("SUPERDEV_STUDIO_API_RATE_LIMIT_EXPENSIVE", 10),
-		APIPipelineLimit:    envIntOrDefault("SUPERDEV_STUDIO_API_RATE_LIMIT_PIPELINE", 6),
+		Addr:                       envOrDefault("SUPERDEV_STUDIO_ADDR", ":8080"),
+		DBPath:                     envOrDefault("SUPERDEV_STUDIO_DB", "./data/superdev_studio.db"),
+		SuperDevCmd:                envOrDefault("SUPER_DEV_CMD", "python -m super_dev.cli"),
+		SuperDevWorkdir:            envOrDefault("SUPER_DEV_WORKDIR", ""),
+		VolcengineAPIKey:           envOrDefault("VOLCENGINE_ARK_API_KEY", ""),
+		VolcengineModel:            envOrDefault("VOLCENGINE_ARK_MODEL", ""),
+		VolcengineBaseURL:          envOrDefault("VOLCENGINE_ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"),
+		APIRateLimitEnabled:        envBoolOrDefault("SUPERDEV_STUDIO_API_RATE_LIMIT_ENABLED", true),
+		APIRateLimitWindow:         envDurationOrDefault("SUPERDEV_STUDIO_API_RATE_LIMIT_WINDOW", time.Minute),
+		APIMutationLimit:           envIntOrDefault("SUPERDEV_STUDIO_API_RATE_LIMIT_MUTATION", 24),
+		APIExpensiveLimit:          envIntOrDefault("SUPERDEV_STUDIO_API_RATE_LIMIT_EXPENSIVE", 10),
+		APIPipelineLimit:           envIntOrDefault("SUPERDEV_STUDIO_API_RATE_LIMIT_PIPELINE", 6),
+		AutoAdvanceWorkerEnabled:   envBoolOrDefault("SUPERDEV_STUDIO_AUTO_ADVANCE_WORKER_ENABLED", true),
+		AutoAdvanceWorkerInterval:  envDurationOrDefault("SUPERDEV_STUDIO_AUTO_ADVANCE_WORKER_INTERVAL", 5*time.Second),
+		AutoAdvanceWorkerBatchSize: envIntOrDefault("SUPERDEV_STUDIO_AUTO_ADVANCE_WORKER_BATCH_SIZE", 8),
 	}
 }
 
@@ -160,9 +166,10 @@ func envDurationOrDefault(key string, fallback time.Duration) time.Duration {
 }
 
 type App struct {
-	cfg        Config
-	store      *store.Store
-	httpServer *http.Server
+	cfg               Config
+	store             *store.Store
+	httpServer        *http.Server
+	autoAdvanceWorker *api.AutoAdvanceWorker
 }
 
 func New(cfg Config) (*App, error) {
@@ -211,11 +218,21 @@ func New(cfg Config) (*App, error) {
 		Handler:           apiServer.Router(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	autoAdvanceWorker := api.NewAutoAdvanceWorker(apiServer, api.AutoAdvanceWorkerConfig{
+		Enabled:   cfg.AutoAdvanceWorkerEnabled,
+		Interval:  cfg.AutoAdvanceWorkerInterval,
+		BatchSize: cfg.AutoAdvanceWorkerBatchSize,
+	})
 
-	return &App{cfg: cfg, store: s, httpServer: httpServer}, nil
+	return &App{cfg: cfg, store: s, httpServer: httpServer, autoAdvanceWorker: autoAdvanceWorker}, nil
 }
 
 func (a *App) Run(ctx context.Context) error {
+	if a.autoAdvanceWorker != nil {
+		go func() {
+			_ = a.autoAdvanceWorker.Run(ctx)
+		}()
+	}
 	errCh := make(chan error, 1)
 	go func() {
 		err := a.httpServer.ListenAndServe()

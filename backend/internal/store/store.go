@@ -1596,6 +1596,70 @@ func (s *Store) ListPipelineRuns(ctx context.Context, projectID string, limit in
 	return items, rows.Err()
 }
 
+func (s *Store) ListAutoAdvanceCandidateRuns(ctx context.Context, limit int) ([]PipelineRun, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT
+			pr.id, pr.project_id, pr.change_batch_id, pr.external_change_id, pr.prompt,
+			pr.llm_enhanced_loop, pr.multimodal_assets,
+			pr.simulate, pr.project_dir, pr.platform, pr.frontend, pr.backend, pr.domain,
+			pr.context_mode, pr.context_query, pr.context_token_budget, pr.context_max_items, pr.context_dynamic, pr.memory_writeback, pr.full_cycle, pr.step_by_step, pr.iteration_limit, pr.retry_of,
+			pr.status, pr.progress, pr.stage, pr.created_at, pr.updated_at, pr.started_at, pr.finished_at
+		 FROM pipeline_runs pr
+		 WHERE pr.status IN ('failed', 'completed')
+		   AND NOT EXISTS (SELECT 1 FROM pipeline_runs child WHERE child.retry_of = pr.id)
+		 ORDER BY pr.updated_at DESC
+		 LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PipelineRun{}
+	for rows.Next() {
+		var run PipelineRun
+		if err := scanPipelineRun(rows, &run); err != nil {
+			return nil, err
+		}
+		items = append(items, run)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) TouchPipelineRun(ctx context.Context, runID string) error {
+	trimmed := strings.TrimSpace(runID)
+	if trimmed == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE pipeline_runs SET updated_at=? WHERE id=?`,
+		formatTime(nowUTC()),
+		trimmed,
+	)
+	return err
+}
+
+func (s *Store) SyncRequirementSessionsLatestRunByChangeBatch(ctx context.Context, changeBatchID, latestRunID string) error {
+	trimmedChangeBatchID := strings.TrimSpace(changeBatchID)
+	trimmedRunID := strings.TrimSpace(latestRunID)
+	if trimmedChangeBatchID == "" || trimmedRunID == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE requirement_sessions SET latest_run_id=?, updated_at=? WHERE latest_change_batch_id=?`,
+		trimmedRunID,
+		formatTime(nowUTC()),
+		trimmedChangeBatchID,
+	)
+	return err
+}
+
 func (s *Store) AppendRunEvent(ctx context.Context, event RunEvent) (RunEvent, error) {
 	if event.CreatedAt.IsZero() {
 		event.CreatedAt = nowUTC()
